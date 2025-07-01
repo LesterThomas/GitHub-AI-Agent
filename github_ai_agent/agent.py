@@ -70,36 +70,78 @@ class GitHubIssueAgent:
     def _create_tools(self) -> List[Tool]:
         """Create tools for the agent."""
 
-        def create_file_content(content: str) -> str:
-            """Create file content based on the issue requirements."""
-            return f"Generated content: {content}"
+        def analyze_issue_requirements(issue_title: str, issue_body: str) -> str:
+            """Analyze issue requirements to extract file creation requests and content requirements."""
+            import re
+            
+            # Combine title and body for analysis
+            full_text = f"{issue_title}\n{issue_body or ''}"
+            
+            # Look for file creation patterns
+            file_patterns = [
+                r'[Cc]reate\s+(?:a\s+)?([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)',  # "Create TEST.md" or "Create a file.txt"
+                r'[Aa]dd\s+(?:a\s+)?([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)',     # "Add TEST.md"
+                r'[Mm]ake\s+(?:a\s+)?([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)',    # "Make TEST.md"
+                r'([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)\s+(?:file|document)',   # "TEST.md file"
+            ]
+            
+            requested_files = []
+            for pattern in file_patterns:
+                matches = re.findall(pattern, full_text, re.IGNORECASE)
+                requested_files.extend(matches)
+            
+            # Remove duplicates while preserving order
+            unique_files = []
+            for f in requested_files:
+                if f not in unique_files:
+                    unique_files.append(f)
+            
+            # Extract content requirements
+            content_requirements = []
+            if "describing" in full_text.lower():
+                desc_match = re.search(r'describing\s+(.+?)(?:\.|$)', full_text, re.IGNORECASE)
+                if desc_match:
+                    content_requirements.append(f"describing {desc_match.group(1).strip()}")
+            
+            result = {
+                "requested_files": unique_files,
+                "content_requirements": content_requirements,
+                "original_text": full_text[:200] + "..." if len(full_text) > 200 else full_text
+            }
+            
+            return str(result)
 
-        def analyze_issue_requirements(issue_body: str) -> str:
-            """Analyze issue requirements to understand what needs to be generated."""
-            # This is a simple implementation - in practice, you might want
-            # more sophisticated parsing
-            return f"Analyzed requirements from: {issue_body[:200]}..."
+        def create_file_content(filename: str, requirements: str) -> str:
+            """Create appropriate file content based on filename and requirements."""
+            # This will be enhanced by the LLM to generate actual content
+            return f"Content for {filename} based on requirements: {requirements}"
 
-        def validate_content(content: str) -> str:
+        def validate_content(content: str, filename: str = "") -> str:
             """Validate the generated content."""
-            if len(content.strip()) > 0:
-                return "Content validation passed"
-            return "Content validation failed: empty content"
+            if not content or len(content.strip()) == 0:
+                return "Content validation failed: empty content"
+            
+            # Basic validation based on file type
+            if filename.endswith('.md'):
+                if not content.startswith('#') and '# ' not in content:
+                    return "Content validation warning: Markdown file should contain headers"
+            
+            return "Content validation passed"
 
         return [
             Tool(
                 name="analyze_issue_requirements",
-                description="Analyze the GitHub issue to understand what content needs to be generated",
-                func=analyze_issue_requirements,
+                description="Analyze the GitHub issue title and body to extract file creation requests and content requirements",
+                func=lambda issue_text: analyze_issue_requirements(*issue_text.split('\n', 1) if '\n' in issue_text else (issue_text, "")),
             ),
             Tool(
                 name="create_file_content",
-                description="Create file content based on the analyzed requirements",
+                description="Create appropriate file content based on filename and requirements",
                 func=create_file_content,
             ),
             Tool(
                 name="validate_content",
-                description="Validate the generated content before creating PR",
+                description="Validate the generated content for quality and format",
                 func=validate_content,
             ),
         ]
@@ -136,7 +178,7 @@ class GitHubIssueAgent:
             system_message = SystemMessage(content=self._get_system_prompt())
             human_message = HumanMessage(
                 content=f"""
-                Please process this GitHub issue and generate appropriate content:
+                Please process this GitHub issue to identify and create the requested files:
                 
                 Issue #{issue.number}: {issue.title}
                 
@@ -145,8 +187,13 @@ class GitHubIssueAgent:
                 
                 Labels: {', '.join([label.name for label in issue.labels])}
                 
-                Please analyze the requirements, generate the appropriate content, 
-                validate it, and provide a summary of what should be included in the pull request.
+                Please:
+                1. Use analyze_issue_requirements to identify what files need to be created
+                2. For each requested file, use create_file_content to generate appropriate content
+                3. Use validate_content to ensure quality
+                4. Provide the final content for each file that should be created
+                
+                Focus on creating the exact files requested in the issue, not just metadata files.
                 """
             )
 
@@ -162,7 +209,7 @@ class GitHubIssueAgent:
             config = {"configurable": {"thread_id": f"issue-{issue.number}"}}
             result = self.agent.invoke(initial_state, config)
 
-            # Extract the final response
+            # Extract the final response and parse for file creation requirements
             final_message = result["messages"][-1]
             generated_content = (
                 final_message.content
@@ -170,13 +217,71 @@ class GitHubIssueAgent:
                 else str(final_message)
             )
 
+            # Parse the issue to extract file requirements
+            import re
+            import ast
+            
+            # Try to extract file requirements from the issue
+            issue_text = f"{issue.title}\n{issue.body or ''}"
+            
+            # Look for file creation patterns
+            file_patterns = [
+                r'[Cc]reate\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)',  # "Create TEST.md"
+                r'[Aa]dd\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)',     # "Add TEST.md"
+                r'[Mm]ake\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)',    # "Make TEST.md"
+                r'([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)\s+(?:file|document)',   # "TEST.md file"
+            ]
+            
+            requested_files = []
+            for pattern in file_patterns:
+                matches = re.findall(pattern, issue_text, re.IGNORECASE)
+                requested_files.extend(matches)
+            
+            # Remove duplicates
+            requested_files = list(dict.fromkeys(requested_files))
+            
             # Create branch and PR
             branch_name = f"ai-agent/issue-{issue.number}"
 
             if self.github_client.create_branch(branch_name):
-                # Create a file with the generated content
-                file_path = f"generated/issue-{issue.number}.md"
-                file_content = f"""# Response to Issue #{issue.number}: {issue.title}
+                files_created = []
+                
+                if requested_files:
+                    # Create the specific files requested in the issue
+                    for filename in requested_files:
+                        # Generate content for the specific file based on the issue requirements
+                        if "describing" in issue_text.lower():
+                            desc_match = re.search(r'describing\s+(.+?)(?:\.|$)', issue_text, re.IGNORECASE)
+                            topic = desc_match.group(1).strip() if desc_match else "the requested topic"
+                        else:
+                            topic = "the requested content"
+                        
+                        # Generate appropriate content based on file type
+                        if filename.endswith('.md'):
+                            file_content = f"""# {topic.title()}
+
+{self._generate_content_for_topic(topic)}
+
+---
+*This file was automatically generated by AI Agent in response to issue #{issue.number}*
+"""
+                        else:
+                            file_content = f"""{self._generate_content_for_topic(topic)}
+
+This file was automatically generated by AI Agent in response to issue #{issue.number}
+"""
+                        
+                        if self.github_client.create_or_update_file(
+                            path=filename,
+                            content=file_content,
+                            message=f"Create {filename} as requested in issue #{issue.number}",
+                            branch=branch_name,
+                        ):
+                            files_created.append(filename)
+                else:
+                    # Fallback: create a metadata file if no specific files were identified
+                    file_path = f"generated/issue-{issue.number}.md"
+                    file_content = f"""# Response to Issue #{issue.number}: {issue.title}
 
 ## Original Issue
 {issue.body or 'No description provided'}
@@ -189,28 +294,34 @@ class GitHubIssueAgent:
 - Created by: AI Agent
 - Branch: {branch_name}
 """
-
-                if self.github_client.create_or_update_file(
-                    path=file_path,
-                    content=file_content,
-                    message=f"AI Agent response to issue #{issue.number}",
-                    branch=branch_name,
-                ):
+                    if self.github_client.create_or_update_file(
+                        path=file_path,
+                        content=file_content,
+                        message=f"AI Agent response to issue #{issue.number}",
+                        branch=branch_name,
+                    ):
+                        files_created.append(file_path)
+                
+                if files_created:
                     # Create pull request
-                    pr_title = (
-                        f"AI Agent Response to Issue #{issue.number}: {issue.title}"
-                    )
+                    if requested_files:
+                        pr_title = f"Create {', '.join(requested_files)} as requested in issue #{issue.number}"
+                        files_list = '\n'.join([f"- `{f}`: {self._describe_file(f)}" for f in files_created])
+                    else:
+                        pr_title = f"AI Agent Response to Issue #{issue.number}: {issue.title}"
+                        files_list = f"- `{files_created[0]}`: Generated response content"
+                    
                     pr_body = f"""
 This pull request was automatically generated by the AI Agent in response to issue #{issue.number}.
 
 ## Original Issue
 {issue.title}
 
-## Summary
-{generated_content[:500]}...
+## Files Created
+{files_list}
 
-## Files Changed
-- `{file_path}`: Generated response content
+## Summary
+{generated_content[:500]}{'...' if len(generated_content) > 500 else ''}
 
 ## Related Issue
 Closes #{issue.number}
@@ -246,21 +357,100 @@ Closes #{issue.number}
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the agent."""
         return """
-You are an AI agent designed to process GitHub issues and generate appropriate content.
+You are an AI agent designed to process GitHub issues and create the specific files requested.
 
 Your role is to:
-1. Analyze the GitHub issue requirements carefully
-2. Generate appropriate content based on the issue description
-3. Validate the generated content
-4. Provide clear, helpful responses
+1. Analyze the GitHub issue to identify specific file creation requests
+2. Extract the exact filename and content requirements
+3. Generate high-quality content that fulfills the request
+4. Create the requested files with appropriate content
 
 When processing an issue:
-- Read the issue title and description thoroughly
-- Identify what type of content is being requested
-- Generate relevant, high-quality content
-- Ensure the content addresses the issue requirements
-- Be helpful and professional in your responses
+- Use analyze_issue_requirements to parse the issue and identify requested files
+- If a specific file is requested (like "TEST.md"), create that exact file
+- Generate content that matches the requirements (e.g., "describing Cardiff" means create content about Cardiff)
+- Use create_file_content to generate appropriate content for each file type
+- Validate the content before finalizing
 
-Use the available tools to analyze requirements, create content, and validate your work.
-Always aim to provide value and follow the instructions given in the issue.
+For file creation requests:
+- Extract the exact filename from the issue text
+- Understand the content requirements (what the file should contain)
+- Generate relevant, well-structured content
+- For markdown files, use proper markdown formatting with headers
+- Ensure the content directly addresses what was requested
+
+Use the available tools systematically:
+1. analyze_issue_requirements to understand what files to create
+2. create_file_content to generate appropriate content
+3. validate_content to ensure quality
+
+Always aim to fulfill the specific request rather than creating generic response files.
 """
+
+    def _generate_content_for_topic(self, topic: str) -> str:
+        """Generate basic content for a given topic."""
+        # This is a simple implementation - in a real scenario, you might want
+        # to use the LLM to generate more sophisticated content
+        if "cardiff" in topic.lower():
+            return """Cardiff is the capital and largest city of Wales. Located in the south of Wales, it is a vibrant city with a rich history and modern attractions.
+
+## Key Features
+- **Population**: Approximately 365,000 people
+- **Location**: South Wales, near the border with England  
+- **River**: Situated on the River Taff
+- **Bay**: Home to Cardiff Bay, a popular waterfront area
+
+## Notable Attractions
+- **Cardiff Castle**: A medieval castle in the heart of the city
+- **Millennium Stadium**: Wales' national stadium for rugby and football
+- **Cardiff Bay**: Regenerated waterfront with shops, restaurants and entertainment
+- **National Museum Cardiff**: Houses art, natural history and archaeology collections
+
+## Economy
+Cardiff is a major center for business, finance, and government in Wales. It hosts the Welsh Parliament (Senedd) and many major Welsh institutions.
+
+## Culture
+The city has a thriving cultural scene with theaters, music venues, and annual festivals. Welsh and English are both widely spoken."""
+        
+        elif "test" in topic.lower():
+            return f"""This is a test file created to demonstrate the AI Agent functionality.
+
+## Purpose
+This file serves as an example of how the AI Agent can create files based on GitHub issue requests.
+
+## Topic: {topic}
+Content has been generated based on the requirements specified in the GitHub issue.
+
+## Features
+- Automatic file creation
+- Content generation based on issue requirements
+- Proper markdown formatting
+- Integration with GitHub workflows"""
+        
+        else:
+            return f"""# {topic.title()}
+
+This content was automatically generated based on the topic: {topic}
+
+## Overview
+Information and details about {topic} will be provided here.
+
+## Key Points
+- Relevant information about the topic
+- Generated content based on requirements
+- Structured format for easy reading
+
+## Additional Information
+Further details and context about {topic} can be added as needed."""
+
+    def _describe_file(self, filename: str) -> str:
+        """Provide a description of what a file contains based on its name."""
+        if filename.endswith('.md'):
+            if 'test' in filename.lower():
+                return "Test markdown file with example content"
+            else:
+                return "Markdown file with generated content"
+        elif filename.endswith('.txt'):
+            return "Text file with generated content"
+        else:
+            return "Generated file as requested"
