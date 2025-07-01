@@ -3,7 +3,10 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from github import Github, Issue, PullRequest, Repository
+from github import Github
+from github.Issue import Issue
+from github.PullRequest import PullRequest
+from github.Repository import Repository
 from github.GithubException import GithubException
 
 logger = logging.getLogger(__name__)
@@ -67,7 +70,7 @@ class GitHubClient:
     def create_pull_request(
         self, title: str, body: str, head: str, base: str = "main", draft: bool = False
     ) -> Optional[PullRequest]:
-        """Create a pull request.
+        """Create a pull request in the SAAA repository.
 
         Args:
             title: PR title
@@ -80,17 +83,26 @@ class GitHubClient:
             PullRequest object or None if creation failed
         """
         try:
+            logger.info(
+                f"Creating pull request in {self.target_owner}/{self.target_repo}: '{title}'"
+            )
+            logger.info(f"PR details - Head: {head}, Base: {base}, Draft: {draft}")
             pr = self.repo.create_pull(
                 title=title, body=body, head=head, base=base, draft=draft
             )
-            logger.info(f"Created pull request #{pr.number}: {title}")
+            logger.info(
+                f"Successfully created pull request #{pr.number} in {self.target_owner}/{self.target_repo}: {title}"
+            )
+            logger.info(f"Pull request URL: {pr.html_url}")
             return pr
         except GithubException as e:
-            logger.error(f"Error creating pull request: {e}")
+            logger.error(
+                f"Error creating pull request in {self.target_owner}/{self.target_repo}: {e}"
+            )
             return None
 
     def create_branch(self, branch_name: str, from_branch: str = "main") -> bool:
-        """Create a new branch.
+        """Create a new branch in the SAAA repository.
 
         Args:
             branch_name: Name of the new branch
@@ -100,20 +112,27 @@ class GitHubClient:
             True if successful, False otherwise
         """
         try:
+            logger.info(
+                f"Creating branch '{branch_name}' in {self.target_owner}/{self.target_repo} from '{from_branch}'"
+            )
             ref = self.repo.get_git_ref(f"heads/{from_branch}")
             self.repo.create_git_ref(
                 ref=f"refs/heads/{branch_name}", sha=ref.object.sha
             )
-            logger.info(f"Created branch: {branch_name}")
+            logger.info(
+                f"Successfully created branch '{branch_name}' in {self.target_owner}/{self.target_repo}"
+            )
             return True
         except GithubException as e:
-            logger.error(f"Error creating branch {branch_name}: {e}")
+            logger.error(
+                f"Error creating branch '{branch_name}' in {self.target_owner}/{self.target_repo}: {e}"
+            )
             return False
 
     def create_or_update_file(
         self, path: str, content: str, message: str, branch: str = "main"
     ) -> bool:
-        """Create or update a file in the repository.
+        """Create or update a file in the SAAA repository.
 
         Args:
             path: File path in the repository
@@ -125,6 +144,9 @@ class GitHubClient:
             True if successful, False otherwise
         """
         try:
+            logger.info(
+                f"Creating/updating file '{path}' in {self.target_owner}/{self.target_repo} on branch '{branch}'"
+            )
             # Try to get existing file
             try:
                 file_obj = self.repo.get_contents(path, ref=branch)
@@ -136,16 +158,22 @@ class GitHubClient:
                     sha=file_obj.sha,
                     branch=branch,
                 )
-                logger.info(f"Updated file: {path}")
+                logger.info(
+                    f"Updated file '{path}' in {self.target_owner}/{self.target_repo}"
+                )
             except GithubException:
                 # Create new file
                 self.repo.create_file(
                     path=path, message=message, content=content, branch=branch
                 )
-                logger.info(f"Created file: {path}")
+                logger.info(
+                    f"Created file '{path}' in {self.target_owner}/{self.target_repo}"
+                )
             return True
         except GithubException as e:
-            logger.error(f"Error creating/updating file {path}: {e}")
+            logger.error(
+                f"Error creating/updating file '{path}' in {self.target_owner}/{self.target_repo}: {e}"
+            )
             return False
 
     def add_comment_to_issue(self, issue_number: int, comment: str) -> bool:

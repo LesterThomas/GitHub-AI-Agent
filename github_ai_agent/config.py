@@ -23,11 +23,14 @@ class Settings(BaseSettings):
 
     # OpenAI settings
     openai_api_key: str = Field(..., description="OpenAI API key")
-    openai_model: str = Field(default="gpt-4", description="OpenAI model to use")
+    openai_model: str = Field(default="gpt-4o-mini", description="OpenAI model to use")
 
     # Agent settings
     poll_interval: int = Field(default=300, description="Polling interval in seconds")
-    max_iterations: int = Field(default=10, description="Maximum agent iterations")
+    max_iterations: int = Field(default=20, description="Maximum agent iterations")
+    recursion_limit: int = Field(
+        default=50, description="Maximum recursion limit for LangGraph agent"
+    )
 
     # Logging
     log_level: str = Field(default="INFO", description="Logging level")
