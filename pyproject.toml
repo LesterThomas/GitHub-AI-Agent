@@ -1,0 +1,47 @@
+[project]
+name = "github-ai-agent"
+version = "0.1.0"
+description = "AI Agent using LanGraph ReAct pattern to poll GitHub issues and generate pull requests"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.2.39",
+    "langchain>=0.3.7", 
+    "langchain-openai>=0.2.8",
+    "langchain-community>=0.3.5",
+    "PyGithub>=2.4.0",
+    "python-dotenv>=1.0.1",
+    "httpx>=0.27.2",
+    "pydantic>=2.9.2",
+    "pydantic-settings>=2.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "black>=24.10.0",
+    "isort>=5.13.2",
+    "mypy>=1.13.0",
+]
+
+[project.scripts]
+github-ai-agent = "github_ai_agent.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
