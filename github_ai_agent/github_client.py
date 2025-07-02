@@ -196,3 +196,79 @@ class GitHubClient:
         except GithubException as e:
             logger.error(f"Error adding comment to issue {issue_number}: {e}")
             return False
+
+    def close_issue(self, issue_number: int) -> bool:
+        """Close an issue.
+
+        Args:
+            issue_number: Issue number
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            issue = self.get_issue(issue_number)
+            if issue:
+                issue.edit(state="closed")
+                logger.info(f"Closed issue #{issue_number}")
+                return True
+            return False
+        except GithubException as e:
+            logger.error(f"Error closing issue {issue_number}: {e}")
+            return False
+
+    def get_pull_requests(self, state: str = "open") -> List[PullRequest]:
+        """Get pull requests.
+
+        Args:
+            state: Pull request state ('open', 'closed', 'all')
+
+        Returns:
+            List of pull requests with the specified state
+        """
+        try:
+            pull_requests = self.repo.get_pulls(state=state)
+            return list(pull_requests)
+        except GithubException as e:
+            logger.error(f"Error fetching pull requests: {e}")
+            return []
+
+    def close_pull_request(self, pr_number: int) -> bool:
+        """Close a pull request.
+
+        Args:
+            pr_number: Pull request number
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            pr = self.repo.get_pull(pr_number)
+            if pr:
+                pr.edit(state="closed")
+                logger.info(f"Closed pull request #{pr_number}")
+                return True
+            return False
+        except GithubException as e:
+            logger.error(f"Error closing pull request {pr_number}: {e}")
+            return False
+
+    def create_issue(self, title: str, body: str, labels: Optional[List[str]] = None) -> Optional[Issue]:
+        """Create a new issue.
+
+        Args:
+            title: Issue title
+            body: Issue body
+            labels: List of label names
+
+        Returns:
+            Issue object or None if creation failed
+        """
+        try:
+            logger.info(f"Creating issue in {self.target_owner}/{self.target_repo}: '{title}'")
+            issue = self.repo.create_issue(title=title, body=body, labels=labels or [])
+            logger.info(f"Successfully created issue #{issue.number}: {title}")
+            return issue
+        except GithubException as e:
+            logger.error(f"Error creating issue in {self.target_owner}/{self.target_repo}: {e}")
+            return None
