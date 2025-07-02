@@ -27,7 +27,6 @@ from .logging_utils import (
 
 logger = logging.getLogger(__name__)
 
-
 @contextlib.contextmanager
 def suppress_langgraph_output():
     """Context manager to suppress LangGraph's verbose output."""
@@ -57,218 +56,26 @@ def suppress_langgraph_output():
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
-
-def pretty_print_json(data: Any) -> str:
-    """Pretty print JSON data for logging."""
-    if isinstance(data, str):
-        try:
-            # Try to parse if it's a JSON string
-            parsed = json.loads(data)
-            return json.dumps(parsed, indent=2, ensure_ascii=False)
-        except (json.JSONDecodeError, TypeError):
-            return data
-    else:
-        try:
-            return json.dumps(data, indent=2, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            return str(data)
-
-
-# ANSI color codes for console output
-class Colors:
-    """ANSI color codes for console output."""
-
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-
-    # Modern color palette
-    AGENT = "\033[38;5;45m"    # Bright cyan
-    AGENT_BOLD = "\033[1;38;5;45m"
-    
-    LLM = "\033[38;5;10m"      # Bright green  
-    LLM_BOLD = "\033[1;38;5;10m"
-    
-    TOOL = "\033[38;5;213m"    # Pink/magenta
-    TOOL_BOLD = "\033[1;38;5;213m"
-    
-    SUCCESS = "\033[38;5;46m"  # Bright green
-    SUCCESS_BOLD = "\033[1;38;5;46m"
-    
-    ERROR = "\033[38;5;196m"   # Bright red
-    ERROR_BOLD = "\033[1;38;5;196m"
-    
-    WARNING = "\033[38;5;214m" # Orange
-    WARNING_BOLD = "\033[1;38;5;214m"
-    
-    INFO = "\033[38;5;117m"    # Light blue
-    INFO_BOLD = "\033[1;38;5;117m"
-    
-    GITHUB = "\033[38;5;208m"  # Orange
-    GITHUB_BOLD = "\033[1;38;5;208m"
-    
-    # UI Elements
-    BORDER = "\033[38;5;240m"  # Dark gray
-    SEPARATOR = "─"
-    ARROW = "→"
-    BULLET = "•"
-
-
-def get_timestamp():
-    """Get a formatted timestamp."""
-    from datetime import datetime
-    return datetime.now().strftime("%H:%M:%S")
-
-
-def print_separator(char="─", length=80, color=None):
-    """Print a visual separator line."""
-    if color:
-        print(f"{color}{char * length}{Colors.RESET}")
-    else:
-        print(f"{Colors.BORDER}{char * length}{Colors.RESET}")
-
-
-def log_agent_action(message: str, action_type: str = "ACTION"):
-    """Log agent actions with enhanced formatting and color coding."""
-    timestamp = get_timestamp()
-    
-    # Special handling for different action types
-    icon_map = {
-        "APP_START": "🚀",
-        "APP_INIT": "⚙️",
-        "CLIENT_INIT": "🔗",
-        "AGENT_INIT": "🤖",
-        "POLL": "�",
-        "NEW_ISSUES": "📝",
-        "ISSUE_START": "🎯",
-        "BRANCH_CREATE_EARLY": "🌿",
-        "SUCCESS": "✅",
-        "FAILED": "❌",
-        "ERROR": "💥",
-        "COMPLETE": "🏁",
-        "MODE": "⚡",
-        "RUN_ONCE": "▶️",
-        "DAEMON_START": "🔄",
-        "SHUTDOWN": "🛑",
-    }
-    
-    icon = icon_map.get(action_type, "🔹")
-    
-    # Format based on action importance
-    if action_type in ["SUCCESS", "COMPLETE"]:
-        color = Colors.SUCCESS_BOLD
-        border_color = Colors.SUCCESS
-    elif action_type in ["ERROR", "FAILED"]:
-        color = Colors.ERROR_BOLD
-        border_color = Colors.ERROR
-    elif action_type in ["APP_START", "APP_INIT", "ISSUE_START"]:
-        color = Colors.AGENT_BOLD
-        border_color = Colors.AGENT
-    else:
-        color = Colors.AGENT
-        border_color = Colors.AGENT
-    
-    # Print formatted message
-    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {color}{message}{Colors.RESET}")
-
-
-def log_github_action(message: str, action_type: str = "GITHUB"):
-    """Log GitHub-specific actions."""
-    timestamp = get_timestamp()
-    icon = "🐙"  # GitHub octopus
-    
-    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {Colors.GITHUB}{message}{Colors.RESET}")
-
-
-def log_llm_interaction(message: str, interaction_type: str = "RESPONSE"):
-    """Log LLM interactions with clean, readable formatting."""
-    timestamp = get_timestamp()
-    
-    if interaction_type == "REQUEST":
-        icon = "🧠➡️"
-        color = Colors.INFO
-        label = "AI REQUEST"
-    elif interaction_type == "RESPONSE":
-        icon = "🧠⬅️"  
-        color = Colors.LLM
-        label = "AI RESPONSE"
-    elif interaction_type == "THINKING":
-        icon = "🤔"
-        color = Colors.LLM_BOLD
-        label = "AI THINKING"
-    else:
-        icon = "🧠"
-        color = Colors.LLM
-        label = "AI"
-    
-    # Truncate long messages for readability
-    display_message = message
-    if len(message) > 150:
-        display_message = message[:147] + "..."
-    
-    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {color}{display_message}{Colors.RESET}")
-
-
-def log_tool_usage(tool_name: str, input_data: str, output_data: str):
-    """Log tool usage with clean, formatted output."""
-    timestamp = get_timestamp()
-    icon = "🔧"
-    
-    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {Colors.TOOL_BOLD}TOOL {tool_name}{Colors.RESET}")
-    
-    # Show truncated input/output for readability
-    if input_data:
-        truncated_input = input_data[:100] + "..." if len(input_data) > 100 else input_data
-        print(f"   {Colors.TOOL}└─ Input: {truncated_input}{Colors.RESET}")
-    
-    if output_data:
-        truncated_output = output_data[:100] + "..." if len(output_data) > 100 else output_data
-        if "success" in output_data.lower() and "true" in output_data.lower():
-            print(f"   {Colors.SUCCESS}└─ ✅ {truncated_output}{Colors.RESET}")
-        elif "error" in output_data.lower() or "failed" in output_data.lower():
-            print(f"   {Colors.ERROR}└─ ❌ {truncated_output}{Colors.RESET}")
-        else:
-            print(f"   {Colors.TOOL}└─ Output: {truncated_output}{Colors.RESET}")
-
-
-def log_error(message: str, error_type: str = "ERROR"):
-    """Log errors with prominent formatting."""
-    timestamp = get_timestamp()
-    icon = "💥" if error_type == "ERROR" else "⚠️"
-    
-    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {Colors.ERROR_BOLD}{message}{Colors.RESET}")
-
-
-def log_info(message: str, info_type: str = "INFO"):
-    """Log general information with clean formatting."""
-    timestamp = get_timestamp()
-    
-    # Choose appropriate icon and color based on content
-    if "successfully" in message.lower() or "created" in message.lower():
-        icon = "✅"
-        color = Colors.SUCCESS
-    elif "repository" in message.lower() or "github" in message.lower():
-        icon = "🐙"
-        color = Colors.GITHUB
-    elif "file" in message.lower():
-        icon = "📄"
-        color = Colors.INFO
-    else:
-        icon = "ℹ️"
-        color = Colors.INFO
-    
-    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {color}{message}{Colors.RESET}")
-
-
-def log_section_start(title: str):
-    """Log the start of a major section with visual emphasis."""
-    print_separator("═", 60, Colors.AGENT)
-    print(f"{Colors.AGENT_BOLD}🎯 {title.upper()}{Colors.RESET}")
-    print_separator("─", 60, Colors.AGENT)
-
-
 class AgentState(TypedDict):
-    """State for the agent."""
+    """
+    Represents the state of a GitHub AI agent throughout its lifecycle.
+    This TypedDict defines the structure for maintaining agent state during
+    issue processing, code generation, and pull request creation workflows.
+    Attributes:
+        messages: A list of conversation messages between the agent and user,
+            automatically managed by the add_messages annotation to handle
+            message accumulation and deduplication.
+        issue_data: A dictionary containing GitHub issue metadata including
+            issue number, title, body, labels, assignees, and any other
+            relevant information fetched from the GitHub API.
+        generated_content: The AI-generated code, documentation, or other
+            content produced in response to the issue. None if content
+            generation hasn't occurred yet.
+        branch_name: The name of the Git branch created for the changes.
+            None if branch creation hasn't occurred yet.
+        pr_created: Boolean flag indicating whether a pull request has been
+            successfully created for the generated changes.
+    """
 
     messages: Annotated[List[BaseMessage], add_messages]
     issue_data: Dict[str, Any]
@@ -287,98 +94,6 @@ class IssueProcessingResult:
     error_message: Optional[str] = None
 
 
-class LoggingLLM:
-    """Wrapper for LLM to add logging functionality."""
-
-    def __init__(self, base_llm):
-        self.base_llm = base_llm
-        # Copy all attributes from the base LLM
-        for attr in dir(base_llm):
-            if not attr.startswith("_") and not callable(getattr(base_llm, attr)):
-                setattr(self, attr, getattr(base_llm, attr))
-
-    def invoke(self, messages, **kwargs):
-        """Log LLM invocation with enhanced formatting."""
-        # Log the input with message type distinction
-        if isinstance(messages, list):
-            log_llm_interaction("=" * 60, "REQUEST_START")
-            for i, msg in enumerate(messages):
-                msg_content = str(msg.content) if hasattr(msg, "content") else str(msg)
-                msg_type = (
-                    type(msg).__name__ if hasattr(msg, "__class__") else "Unknown"
-                )
-
-                # Use different colors for different message types
-                if "System" in msg_type:
-                    msg_color = Colors.WARNING
-                    msg_icon = "⚙️"
-                elif "Human" in msg_type:
-                    msg_color = Colors.INFO
-                    msg_icon = "👤"
-                else:
-                    msg_color = Colors.LLM
-                    msg_icon = "🤖"
-
-                logger.info(
-                    f"{msg_color}{msg_icon} {msg_type} Message #{i+1}:{Colors.RESET}"
-                )
-
-                # Format content with proper line breaks
-                content_lines = msg_content.split("\n")
-                for j, line in enumerate(content_lines[:5]):  # Show first 5 lines
-                    if line.strip():
-                        truncated_line = line[:300] + "..." if len(line) > 300 else line
-                        logger.info(f"{msg_color}  {truncated_line}{Colors.RESET}")
-
-                if len(content_lines) > 5:
-                    logger.info(
-                        f"{msg_color}  ... ({len(content_lines) - 5} more lines){Colors.RESET}"
-                    )
-
-                if i < len(messages) - 1:  # Add separator between messages
-                    logger.info(f"{Colors.INFO}{'┈' * 40}{Colors.RESET}")
-
-            log_llm_interaction("=" * 60, "REQUEST_END")
-        else:
-            input_content = (
-                str(messages.content) if hasattr(messages, "content") else str(messages)
-            )
-            log_llm_interaction(f"Input: {input_content}", "REQUEST")
-
-        # Call the base LLM
-        response = self.base_llm.invoke(messages, **kwargs)
-
-        # Log the response with enhanced formatting
-        response_content = (
-            str(response.content) if hasattr(response, "content") else str(response)
-        )
-
-        # Add response header
-        logger.info(f"{Colors.LLM_BOLD}🎯 LLM RESPONSE:{Colors.RESET}")
-        logger.info(f"{Colors.LLM}{'═' * 60}{Colors.RESET}")
-
-        # Format response content
-        response_lines = response_content.split("\n")
-        for i, line in enumerate(response_lines):
-            if line.strip():
-                # Add line numbers for long responses
-                line_prefix = f"{i+1:3d}: " if len(response_lines) > 10 else "     "
-                truncated_line = line[:400] + "..." if len(line) > 400 else line
-                logger.info(f"{Colors.LLM}{line_prefix}{truncated_line}{Colors.RESET}")
-
-        # Add response footer
-        logger.info(f"{Colors.LLM}{'═' * 60}{Colors.RESET}")
-        logger.info(
-            f"{Colors.LLM_BOLD}📊 Response Length: {len(response_content)} characters{Colors.RESET}"
-        )
-
-        return response
-
-    def __getattr__(self, name):
-        """Delegate all other attributes to the base LLM."""
-        return getattr(self.base_llm, name)
-
-
 class GitHubIssueAgent:
     """LanGraph ReAct agent for processing GitHub issues."""
 
@@ -386,7 +101,7 @@ class GitHubIssueAgent:
         self,
         github_client: GitHubClient,
         openai_api_key: str,
-        model: str = "gpt-4",
+        model: str = "gpt-4o-mini",
         max_iterations: int = 5,
         recursion_limit: int = 10,
     ):
@@ -401,7 +116,7 @@ class GitHubIssueAgent:
         """
         self.github_client = github_client
         base_llm = ChatOpenAI(api_key=openai_api_key, model=model, temperature=0.1)
-        self.llm = LoggingLLM(base_llm)
+        self.llm = base_llm
         self.max_iterations = max_iterations
         self.recursion_limit = recursion_limit
 
@@ -694,13 +409,11 @@ Use the create_files_from_request tool with proper JSON formatting."""
             )
 
             log_info(f"Generated content length: {len(generated_content)} characters")
-            log_agent_action("Checking tool execution results", "PARSE")
 
             # Check if files were created by the tool (tool creates files directly now)
             files_created = []
             
             # Look for ToolMessage instances that contain the tool results
-            log_info("Searching for tool results in message history")
             for msg in final_state.get("messages", []):
                 # Check for ToolMessage instances (the actual tool results)
                 if hasattr(msg, "name") and msg.name == "create_files_from_request":
@@ -708,12 +421,7 @@ Use the create_files_from_request tool with proper JSON formatting."""
                         tool_result = json.loads(msg.content)
                         if tool_result.get("success") and tool_result.get("files_created"):
                             files_created.extend(tool_result["files_created"])
-                            log_info(
-                                f"Tool created {len(tool_result['files_created'])} files directly in GitHub"
-                            )
                             break  # Found the tool result, no need to continue
-                        elif not tool_result.get("success"):
-                            log_error(f"Tool execution failed: {tool_result.get('error', 'Unknown error')}")
                     except json.JSONDecodeError as e:
                         log_error(f"Failed to parse ToolMessage JSON: {e}")
                         continue
@@ -1438,176 +1146,3 @@ Further details and context about {topic} can be added as needed."""
         log_info(f"File description for {filename}: {description}")
         return description
 
-
-def create_state_logging_graph_example():
-    """Example of how to create a LangGraph with comprehensive state logging."""
-    from langgraph.graph import StateGraph
-    from langgraph.checkpoint.memory import MemorySaver
-    from typing import TypedDict, Annotated
-    from langchain_core.messages import BaseMessage
-
-    class ExampleState(TypedDict):
-        """Example state for demonstration."""
-
-        messages: Annotated[List[BaseMessage], add_messages]
-        step_count: int
-        current_action: str
-        data: dict
-
-    def log_state_update(state: ExampleState, step_name: str):
-        """Log state updates with detailed information."""
-        log_agent_action(f"State update in {step_name}", "STATE_UPDATE")
-        log_info(f"  Messages count: {len(state.get('messages', []))}")
-        log_info(f"  Step count: {state.get('step_count', 0)}")
-        log_info(f"  Current action: {state.get('current_action', 'None')}")
-        log_info(f"  Data keys: {list(state.get('data', {}).keys())}")
-
-    def node_1(state: ExampleState) -> ExampleState:
-        """Example node with state logging."""
-        log_agent_action("Entering node_1", "NODE_ENTRY")
-        log_state_update(state, "node_1_entry")
-
-        # Simulate some work
-        new_state = {
-            **state,
-            "step_count": state.get("step_count", 0) + 1,
-            "current_action": "processing_in_node_1",
-            "data": {**state.get("data", {}), "node_1_result": "completed"},
-        }
-
-        log_state_update(new_state, "node_1_exit")
-        log_agent_action("Exiting node_1", "NODE_EXIT")
-        return new_state
-
-    def node_2(state: ExampleState) -> ExampleState:
-        """Another example node with state logging."""
-        log_agent_action("Entering node_2", "NODE_ENTRY")
-        log_state_update(state, "node_2_entry")
-
-        new_state = {
-            **state,
-            "step_count": state.get("step_count", 0) + 1,
-            "current_action": "processing_in_node_2",
-            "data": {**state.get("data", {}), "node_2_result": "completed"},
-        }
-
-        log_state_update(new_state, "node_2_exit")
-        log_agent_action("Exiting node_2", "NODE_EXIT")
-        return new_state
-
-    # Create the graph
-    workflow = StateGraph(ExampleState)
-    workflow.add_node("node_1", node_1)
-    workflow.add_node("node_2", node_2)
-    workflow.set_entry_point("node_1")
-    workflow.add_edge("node_1", "node_2")
-    workflow.add_edge("node_2", END)
-
-    # Compile with checkpointer for state persistence
-    app = workflow.compile(checkpointer=MemorySaver())
-
-    return app
-
-
-def run_with_comprehensive_logging(agent, initial_state, config):
-    """Run agent with comprehensive state logging using all available stream modes."""
-    log_agent_action("Starting comprehensive logging execution", "START")
-
-    # Available stream modes:
-    # - "values": Complete state after each step
-    # - "updates": Individual node updates
-    # - "debug": Debug information
-    # - "messages": LLM message tokens (if applicable)
-    # - "custom": Custom events
-
-    final_state = None
-    step_count = 0
-
-    try:
-        for chunk in agent.stream(
-            initial_state,
-            config,
-            stream_mode=["values"],  # Clean output mode
-            debug=False,
-        ):
-            step_count += 1
-
-            if isinstance(chunk, tuple):
-                if len(chunk) == 2:
-                    mode, data = chunk
-                    _log_chunk_data(step_count, mode, data)
-                elif len(chunk) == 3:
-                    # For subgraph streaming: (namespace, mode, data)
-                    namespace, mode, data = chunk
-                    _log_chunk_data(step_count, mode, data, namespace)
-            elif isinstance(chunk, dict):
-                # Direct state update
-                _log_chunk_data(step_count, "values", chunk)
-                final_state = chunk
-            else:
-                log_info(f"Step {step_count}: Unexpected chunk type: {type(chunk)}")
-
-        log_agent_action(
-            f"Comprehensive logging completed after {step_count} steps", "COMPLETE"
-        )
-        return final_state
-
-    except Exception as e:
-        log_error(f"Error during comprehensive logging: {e}", "LOGGING_ERROR")
-        raise
-
-
-def _log_chunk_data(step: int, mode: str, data: Any, namespace: tuple = None):
-    """Log individual chunk data with detailed formatting."""
-    prefix = f"Step {step}"
-    if namespace:
-        prefix += f" [NS: {'.'.join(namespace)}]"
-
-    if mode == "values":
-        if isinstance(data, dict):
-            # Log state structure
-            state_summary = {
-                key: (
-                    f"{type(value).__name__}({len(value)} items)"
-                    if isinstance(value, (list, dict))
-                    else f"{type(value).__name__}"
-                )
-                for key, value in data.items()
-            }
-            log_agent_action(
-                f"{prefix} - Complete State: {state_summary}", "STATE_VALUES"
-            )
-
-            # Log specific interesting fields
-            if "messages" in data and data["messages"]:
-                last_msg = data["messages"][-1]
-                msg_content = getattr(last_msg, "content", str(last_msg))
-                truncated = (
-                    msg_content[:150] + "..."
-                    if len(str(msg_content)) > 150
-                    else str(msg_content)
-                )
-                log_info(f"  Latest message: {truncated}")
-
-    elif mode == "updates":
-        if isinstance(data, dict):
-            for node_name, update in data.items():
-                if node_name != "__end__":
-                    log_agent_action(
-                        f"{prefix} - Node '{node_name}' produced update", "NODE_UPDATE"
-                    )
-                    if hasattr(update, "content"):
-                        content_preview = (
-                            str(update.content)[:100] + "..."
-                            if len(str(update.content)) > 100
-                            else str(update.content)
-                        )
-                        log_info(f"  Update content: {content_preview}")
-                    else:
-                        log_info(f"  Update: {str(update)[:100]}...")
-
-    elif mode == "debug":
-        log_info(f"{prefix} - Debug: {str(data)[:150]}...")
-
-    else:
-        log_info(f"{prefix} - {mode}: {str(data)[:150]}...")
