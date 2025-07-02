@@ -511,11 +511,12 @@ Returns a JSON object with the prepared files ready for GitHub creation.""",
             ),
         ]
 
-    def process_issue(self, issue_number: int) -> IssueProcessingResult:
+    def process_issue(self, issue_number: int, branch_name: Optional[str] = None) -> IssueProcessingResult:
         """Process a GitHub issue and create a pull request.
 
         Args:
             issue_number: GitHub issue number
+            branch_name: Pre-created branch name (if None, will create one)
 
         Returns:
             Result of processing the issue
@@ -705,71 +706,88 @@ Use the create_files_from_request tool with proper JSON formatting."""
 
             log_info(f"Total files to create: {len(files_to_create)}")
 
-            # Create feature branch for the SAAA repository
-            branch_name = f"ai-agent/issue-{issue.number}"
-            log_agent_action(
-                f"Creating feature branch '{branch_name}' in SAAA repository",
-                "BRANCH_CREATE",
-            )
-            log_info(
-                f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
-            )
-
-            if self.github_client.create_branch(branch_name):
+            # Use pre-created branch or create a new one
+            if branch_name is None:
+                branch_name = f"ai-agent/issue-{issue.number}"
+                log_agent_action(
+                    f"Creating feature branch '{branch_name}' in SAAA repository",
+                    "BRANCH_CREATE",
+                )
+                log_info(
+                    f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
+                )
+                
+                if not self.github_client.create_branch(branch_name):
+                    log_error(
+                        f"Failed to create feature branch '{branch_name}' in SAAA repository"
+                    )
+                    error_msg = "Failed to create branch in SAAA repository"
+                    log_error(error_msg)
+                    return IssueProcessingResult(success=False, error_message=error_msg)
+                
                 log_info(
                     f"Successfully created feature branch '{branch_name}' in SAAA repository"
                 )
-                files_created = []
+            else:
+                log_agent_action(
+                    f"Using pre-created branch '{branch_name}' in SAAA repository",
+                    "BRANCH_USE_EXISTING",
+                )
+                log_info(
+                    f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
+                )
 
-                if files_to_create:
-                    log_agent_action(
-                        f"Creating {len(files_to_create)} files from agent output",
-                        "FILE_CREATE",
+            files_created = []
+
+            if files_to_create:
+                log_agent_action(
+                    f"Creating {len(files_to_create)} files from agent output",
+                    "FILE_CREATE",
+                )
+                # Create the files specified by the agent
+                for file_obj in files_to_create:
+                    filename = file_obj.get("filename") or file_obj.get("path")
+                    file_content = file_obj.get("content") or file_obj.get(
+                        "file_content", ""
                     )
-                    # Create the files specified by the agent
-                    for file_obj in files_to_create:
-                        filename = file_obj.get("filename") or file_obj.get("path")
-                        file_content = file_obj.get("content") or file_obj.get(
-                            "file_content", ""
-                        )
 
-                        if not filename:
-                            log_error(f"File object missing filename: {file_obj}")
-                            continue
+                    if not filename:
+                        log_error(f"File object missing filename: {file_obj}")
+                        continue
 
+                    log_info(
+                        f"Creating file: {filename} ({len(str(file_content))} characters)"
+                    )
+
+                    log_agent_action(
+                        f"Creating file {filename} in SAAA repository on branch {branch_name}",
+                        "FILE_COMMIT",
+                    )
+                    if self.github_client.create_or_update_file(
+                        path=filename,
+                        content=file_content,
+                        message=file_obj.get(
+                            "message",
+                            f"Create {filename} as requested in issue #{issue.number}",
+                        ),
+                        branch=branch_name,
+                    ):
+                        files_created.append(filename)
                         log_info(
-                            f"Creating file: {filename} ({len(str(file_content))} characters)"
+                            f"Successfully created file: {filename} in SAAA repository"
                         )
-
-                        log_agent_action(
-                            f"Creating file {filename} in SAAA repository on branch {branch_name}",
-                            "FILE_COMMIT",
+                    else:
+                        log_error(
+                            f"Failed to create file: {filename} in SAAA repository"
                         )
-                        if self.github_client.create_or_update_file(
-                            path=filename,
-                            content=file_content,
-                            message=file_obj.get(
-                                "message",
-                                f"Create {filename} as requested in issue #{issue.number}",
-                            ),
-                            branch=branch_name,
-                        ):
-                            files_created.append(filename)
-                            log_info(
-                                f"Successfully created file: {filename} in SAAA repository"
-                            )
-                        else:
-                            log_error(
-                                f"Failed to create file: {filename} in SAAA repository"
-                            )
-                else:
-                    log_agent_action(
-                        "No files specified by agent, creating metadata file",
-                        "FALLBACK",
-                    )
-                    # Fallback: create a metadata file if no specific files were identified
-                    file_path = f"generated/issue-{issue.number}.md"
-                    file_content = f"""# Response to Issue #{issue.number}: {issue.title}
+            else:
+                log_agent_action(
+                    "No files specified by agent, creating metadata file",
+                    "FALLBACK",
+                )
+                # Fallback: create a metadata file if no specific files were identified
+                file_path = f"generated/issue-{issue.number}.md"
+                file_content = f"""# Response to Issue #{issue.number}: {issue.title}
 
 ## Original Issue
 {issue.body or 'No description provided'}
@@ -782,36 +800,36 @@ Use the create_files_from_request tool with proper JSON formatting."""
 - Created by: AI Agent
 - Branch: {branch_name}
 """
-                    log_agent_action(
-                        f"Creating fallback file {file_path} in SAAA repository",
-                        "FILE_COMMIT",
+                log_agent_action(
+                    f"Creating fallback file {file_path} in SAAA repository",
+                    "FILE_COMMIT",
+                )
+                if self.github_client.create_or_update_file(
+                    path=file_path,
+                    content=file_content,
+                    message=f"AI Agent response to issue #{issue.number}",
+                    branch=branch_name,
+                ):
+                    files_created.append(file_path)
+                    log_info(
+                        f"Successfully created fallback file: {file_path} in SAAA repository"
                     )
-                    if self.github_client.create_or_update_file(
-                        path=file_path,
-                        content=file_content,
-                        message=f"AI Agent response to issue #{issue.number}",
-                        branch=branch_name,
-                    ):
-                        files_created.append(file_path)
-                        log_info(
-                            f"Successfully created fallback file: {file_path} in SAAA repository"
-                        )
-                    else:
-                        log_error(
-                            f"Failed to create fallback file: {file_path} in SAAA repository"
-                        )
-
-                if files_created:
-                    log_agent_action(
-                        f"Files created successfully: {files_created}", "FILES_COMPLETE"
-                    )
-                    # Create pull request
-                    pr_title = f"Create {', '.join(files_created)} as requested in issue #{issue.number}"
-                    files_list = "\n".join(
-                        [f"- `{f}`: {self._describe_file(f)}" for f in files_created]
+                else:
+                    log_error(
+                        f"Failed to create fallback file: {file_path} in SAAA repository"
                     )
 
-                    pr_body = f"""
+            if files_created:
+                log_agent_action(
+                    f"Files created successfully: {files_created}", "FILES_COMPLETE"
+                )
+                # Create pull request
+                pr_title = f"Create {', '.join(files_created)} as requested in issue #{issue.number}"
+                files_list = "\n".join(
+                    [f"- `{f}`: {self._describe_file(f)}" for f in files_created]
+                )
+
+                pr_body = f"""
 This pull request was automatically generated by the AI Agent in response to issue #{issue.number}.
 
 ## Repository Workflow
@@ -835,49 +853,45 @@ Closes #{issue.number}
 *This PR was created by the GitHub AI Agent to resolve the issue by creating the requested files in the SAAA repository.*
 """
 
-                    log_agent_action(
-                        f"Creating pull request to SAAA repository: {pr_title}",
-                        "PR_CREATE",
-                    )
-                    pr = self.github_client.create_pull_request(
-                        title=pr_title,
-                        body=pr_body,
-                        head=branch_name,
-                        base="main",
-                        draft=False,
-                    )
-
-                    if pr:
-                        log_info(
-                            f"Successfully created pull request #{pr.number} in SAAA repository"
-                        )
-                        log_info(f"Pull request URL: {pr.html_url}")
-                        # Add comment to the original issue
-                        log_agent_action(
-                            f"Adding comment to issue #{issue.number}", "COMMENT"
-                        )
-                        self.github_client.add_comment_to_issue(
-                            issue.number,
-                            f"I've created a pull request #{pr.number} in the SAAA repository with the generated content. Please review and merge if satisfactory.\n\nPull request: {pr.html_url}",
-                        )
-
-                        log_agent_action(
-                            f"Issue #{issue_number} processed successfully - created PR in SAAA repository",
-                            "SUCCESS",
-                        )
-                        return IssueProcessingResult(
-                            success=True, pr_number=pr.number, branch_name=branch_name
-                        )
-                    else:
-                        log_error("Failed to create pull request in SAAA repository")
-                else:
-                    log_error("No files were created in SAAA repository")
-            else:
-                log_error(
-                    f"Failed to create feature branch '{branch_name}' in SAAA repository"
+                log_agent_action(
+                    f"Creating pull request to SAAA repository: {pr_title}",
+                    "PR_CREATE",
+                )
+                pr = self.github_client.create_pull_request(
+                    title=pr_title,
+                    body=pr_body,
+                    head=branch_name,
+                    base="main",
+                    draft=False,
                 )
 
-            error_msg = "Failed to create branch or pull request in SAAA repository"
+                if pr:
+                    log_info(
+                        f"Successfully created pull request #{pr.number} in SAAA repository"
+                    )
+                    log_info(f"Pull request URL: {pr.html_url}")
+                    # Add comment to the original issue
+                    log_agent_action(
+                        f"Adding comment to issue #{issue.number}", "COMMENT"
+                    )
+                    self.github_client.add_comment_to_issue(
+                        issue.number,
+                        f"I've created a pull request #{pr.number} in the SAAA repository with the generated content. Please review and merge if satisfactory.\n\nPull request: {pr.html_url}",
+                    )
+
+                    log_agent_action(
+                        f"Issue #{issue_number} processed successfully - created PR in SAAA repository",
+                        "SUCCESS",
+                    )
+                    return IssueProcessingResult(
+                        success=True, pr_number=pr.number, branch_name=branch_name
+                    )
+                else:
+                    log_error("Failed to create pull request in SAAA repository")
+            else:
+                log_error("No files were created in SAAA repository")
+
+            error_msg = "Failed to create files or pull request in SAAA repository"
             log_error(error_msg)
             return IssueProcessingResult(success=False, error_message=error_msg)
 
@@ -887,11 +901,12 @@ Closes #{issue.number}
             logger.error(error_msg, exc_info=True)
             return IssueProcessingResult(success=False, error_message=str(e))
 
-    def process_issue_with_logging(self, issue_number: int) -> IssueProcessingResult:
+    def process_issue_with_logging(self, issue_number: int, branch_name: Optional[str] = None) -> IssueProcessingResult:
         """Process a GitHub issue with detailed state logging.
 
         Args:
             issue_number: GitHub issue number
+            branch_name: Pre-created branch name (if None, will create one)
 
         Returns:
             Result of processing the issue
@@ -1029,86 +1044,103 @@ Use the create_files_from_request tool with proper JSON formatting."""
 
             log_info(f"Extracted requested files: {requested_files}")
 
-            # Create feature branch for the SAAA repository
-            branch_name = f"ai-agent/issue-{issue.number}"
-            log_agent_action(
-                f"Creating feature branch '{branch_name}' in SAAA repository",
-                "BRANCH_CREATE",
-            )
-            log_info(
-                f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
-            )
-
-            if self.github_client.create_branch(branch_name):
+            # Use pre-created branch or create a new one
+            if branch_name is None:
+                branch_name = f"ai-agent/issue-{issue.number}"
+                log_agent_action(
+                    f"Creating feature branch '{branch_name}' in SAAA repository",
+                    "BRANCH_CREATE",
+                )
+                log_info(
+                    f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
+                )
+                
+                if not self.github_client.create_branch(branch_name):
+                    log_error(
+                        f"Failed to create feature branch '{branch_name}' in SAAA repository"
+                    )
+                    error_msg = "Failed to create branch in SAAA repository"
+                    log_error(error_msg)
+                    return IssueProcessingResult(success=False, error_message=error_msg)
+                
                 log_info(
                     f"Successfully created feature branch '{branch_name}' in SAAA repository"
                 )
-                files_created = []
+            else:
+                log_agent_action(
+                    f"Using pre-created branch '{branch_name}' in SAAA repository",
+                    "BRANCH_USE_EXISTING",
+                )
+                log_info(
+                    f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
+                )
 
-                if requested_files:
-                    log_agent_action(
-                        f"Creating {len(requested_files)} requested files",
-                        "FILE_CREATE",
-                    )
-                    # Create the specific files requested in the issue
-                    for filename in requested_files:
-                        log_info(f"Processing file: {filename}")
-                        # Generate content for the specific file based on the issue requirements
-                        if "describing" in issue_text.lower():
-                            desc_match = re.search(
-                                r"describing\s+(.+?)(?:\.|$)", issue_text, re.IGNORECASE
-                            )
-                            topic = (
-                                desc_match.group(1).strip()
-                                if desc_match
-                                else "the requested topic"
-                            )
-                        else:
-                            topic = "the requested content"
+            files_created = []
 
-                        log_info(f"Generating content for topic: {topic}")
+            if requested_files:
+                log_agent_action(
+                    f"Creating {len(requested_files)} requested files",
+                    "FILE_CREATE",
+                )
+                # Create the specific files requested in the issue
+                for filename in requested_files:
+                    log_info(f"Processing file: {filename}")
+                    # Generate content for the specific file based on the issue requirements
+                    if "describing" in issue_text.lower():
+                        desc_match = re.search(
+                            r"describing\s+(.+?)(?:\.|$)", issue_text, re.IGNORECASE
+                        )
+                        topic = (
+                            desc_match.group(1).strip()
+                            if desc_match
+                            else "the requested topic"
+                        )
+                    else:
+                        topic = "the requested content"
 
-                        # Generate appropriate content based on file type
-                        if filename.endswith(".md"):
-                            file_content = f"""# {topic.title()}
+                    log_info(f"Generating content for topic: {topic}")
+
+                    # Generate appropriate content based on file type
+                    if filename.endswith(".md"):
+                        file_content = f"""# {topic.title()}
 
 {self._generate_content_for_topic(topic)}
 
 ---
 *This file was automatically generated by AI Agent in response to issue #{issue.number}*
 """
-                        else:
-                            file_content = f"""{self._generate_content_for_topic(topic)}
+                    else:
+                        file_content = f"""{self._generate_content_for_topic(topic)}
 
 This file was automatically generated by AI Agent in response to issue #{issue.number}
 """
 
-                        log_agent_action(
-                            f"Creating file {filename} in SAAA repository on branch {branch_name}",
-                            "FILE_COMMIT",
-                        )
-                        if self.github_client.create_or_update_file(
-                            path=filename,
-                            content=file_content,
-                            message=f"Create {filename} as requested in issue #{issue.number}",
-                            branch=branch_name,
-                        ):
-                            files_created.append(filename)
-                            log_info(
-                                f"Successfully created file: {filename} in SAAA repository"
-                            )
-                        else:
-                            log_error(
-                                f"Failed to create file: {filename} in SAAA repository"
-                            )
-                else:
                     log_agent_action(
-                        "No specific files requested, creating metadata file",
-                        "FALLBACK",
+                        f"Creating file {filename} in SAAA repository on branch {branch_name}",
+                        "FILE_COMMIT",
                     )
-                    # Fallback: create a metadata file if no specific files were identified
-                    file_path = f"generated/issue-{issue.number}.md"
-                    file_content = f"""# Response to Issue #{issue.number}: {issue.title}
+                    if self.github_client.create_or_update_file(
+                        path=filename,
+                        content=file_content,
+                        message=f"Create {filename} as requested in issue #{issue.number}",
+                        branch=branch_name,
+                    ):
+                        files_created.append(filename)
+                        log_info(
+                            f"Successfully created file: {filename} in SAAA repository"
+                        )
+                    else:
+                        log_error(
+                            f"Failed to create file: {filename} in SAAA repository"
+                        )
+            else:
+                log_agent_action(
+                    "No specific files requested, creating metadata file",
+                    "FALLBACK",
+                )
+                # Fallback: create a metadata file if no specific files were identified
+                file_path = f"generated/issue-{issue.number}.md"
+                file_content = f"""# Response to Issue #{issue.number}: {issue.title}
 
 ## Original Issue
 {issue.body or 'No description provided'}
@@ -1121,26 +1153,26 @@ This file was automatically generated by AI Agent in response to issue #{issue.n
 - Created by: AI Agent
 - Branch: {branch_name}
 """
-                    log_agent_action(
-                        f"Creating fallback file {file_path} in SAAA repository",
-                        "FILE_COMMIT",
+                log_agent_action(
+                    f"Creating fallback file {file_path} in SAAA repository",
+                    "FILE_COMMIT",
+                )
+                if self.github_client.create_or_update_file(
+                    path=file_path,
+                    content=file_content,
+                    message=f"AI Agent response to issue #{issue.number}",
+                    branch=branch_name,
+                ):
+                    files_created.append(file_path)
+                    log_info(
+                        f"Successfully created fallback file: {file_path} in SAAA repository"
                     )
-                    if self.github_client.create_or_update_file(
-                        path=file_path,
-                        content=file_content,
-                        message=f"AI Agent response to issue #{issue.number}",
-                        branch=branch_name,
-                    ):
-                        files_created.append(file_path)
-                        log_info(
-                            f"Successfully created fallback file: {file_path} in SAAA repository"
-                        )
-                    else:
-                        log_error(
-                            f"Failed to create fallback file: {file_path} in SAAA repository"
-                        )
+                else:
+                    log_error(
+                        f"Failed to create fallback file: {file_path} in SAAA repository"
+                    )
 
-                if files_created:
+            if files_created:
                     log_agent_action(
                         f"Files created successfully: {files_created}", "FILES_COMPLETE"
                     )
@@ -1220,14 +1252,10 @@ Closes #{issue.number}
                         )
                     else:
                         log_error("Failed to create pull request in SAAA repository")
-                else:
-                    log_error("No files were created in SAAA repository")
             else:
-                log_error(
-                    f"Failed to create feature branch '{branch_name}' in SAAA repository"
-                )
+                log_error("No files were created in SAAA repository")
 
-            error_msg = "Failed to create branch or pull request in SAAA repository"
+            error_msg = "Failed to create files or pull request in SAAA repository"
             log_error(error_msg)
             return IssueProcessingResult(success=False, error_message=error_msg)
 

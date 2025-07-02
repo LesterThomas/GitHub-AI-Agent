@@ -109,19 +109,40 @@ class GitHubAIAgentApp:
                 log_agent_action(
                     f"Processing issue #{issue.number}: {issue.title}", "ISSUE_START"
                 )
-                result = self.agent.process_issue(issue.number)
 
-                if result.success:
-                    log_agent_action(
-                        f"Successfully processed issue #{issue.number}, created PR #{result.pr_number}",
-                        "SUCCESS",
+                # Create branch immediately after detecting new issue
+                branch_name = f"ai-agent/issue-{issue.number}"
+                log_agent_action(
+                    f"Creating feature branch '{branch_name}' in SAAA repository",
+                    "BRANCH_CREATE_EARLY",
+                )
+
+                if self.github_client.create_branch(branch_name):
+                    log_info(
+                        f"Successfully created feature branch '{branch_name}' in SAAA repository"
                     )
-                    self.processed_issues.add(issue.number)
+
+                    # Now process the issue with the pre-created branch
+                    result = self.agent.process_issue(issue.number, branch_name)
+
+                    if result.success:
+                        log_agent_action(
+                            f"Successfully processed issue #{issue.number}, created PR #{result.pr_number}",
+                            "SUCCESS",
+                        )
+                        self.processed_issues.add(issue.number)
+                    else:
+                        log_agent_action(
+                            f"Failed to process issue #{issue.number}: {result.error_message}",
+                            "FAILED",
+                        )
                 else:
                     log_agent_action(
-                        f"Failed to process issue #{issue.number}: {result.error_message}",
-                        "FAILED",
+                        f"Failed to create branch '{branch_name}' for issue #{issue.number}",
+                        "BRANCH_FAILED",
                     )
+                    # Don't process the issue if branch creation failed
+                    continue
 
             except Exception as e:
                 log_agent_action(
