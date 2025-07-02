@@ -13,6 +13,8 @@ from github.PullRequest import PullRequest
 from github.Repository import Repository
 from github.GithubException import GithubException
 
+from .logging_utils import log_github_action, log_info, log_error
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,31 +30,41 @@ class GitHubClient:
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
         private_key_path: Optional[str] = None,
+        prefer_token: bool = False,
     ):
         """Initialize the GitHub client.
 
         Args:
             target_owner: Repository owner
             target_repo: Repository name
-            token: GitHub API token (deprecated, use GitHub App instead)
+            token: GitHub API token
             app_id: GitHub App ID
             client_id: GitHub App Client ID
             client_secret: GitHub App Client Secret
             private_key_path: Path to GitHub App private key file
+            prefer_token: If True, prefer token authentication over GitHub App
         """
         self.target_owner = target_owner
         self.target_repo = target_repo
         self._repo: Optional[Repository] = None
 
-        # Prioritize GitHub App authentication over token
-        if app_id and client_id and client_secret:
-            logger.info("Using GitHub App authentication")
+        # Choose authentication method based on preference and availability
+        if prefer_token and token:
+            logger.info("Using GitHub token authentication (preferred)")
+            self.github = Github(token)
+        elif not prefer_token and app_id and client_id and client_secret:
+            logger.info("Using GitHub App authentication (preferred)")
             self.github = self._create_github_app_client(
                 app_id, client_id, client_secret, private_key_path
             )
         elif token:
-            logger.info("Using GitHub token authentication")
+            logger.info("Using GitHub token authentication (fallback)")
             self.github = Github(token)
+        elif app_id and client_id and client_secret:
+            logger.info("Using GitHub App authentication (fallback)")
+            self.github = self._create_github_app_client(
+                app_id, client_id, client_secret, private_key_path
+            )
         else:
             raise ValueError(
                 "Either GitHub App credentials (app_id, client_id, client_secret) or token must be provided"

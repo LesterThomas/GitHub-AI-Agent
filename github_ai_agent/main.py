@@ -6,42 +6,47 @@ import sys
 import time
 from typing import Set
 
-from .agent import GitHubIssueAgent, log_info, log_agent_action
+from .agent import GitHubIssueAgent
+from .logging_utils import (
+    Colors,
+    log_info,
+    log_agent_action,
+    log_section_start,
+    log_github_action,
+    print_separator,
+)
 from .config import get_settings
 from .github_client import GitHubClient
 
 
-# Configure enhanced logging
-class ColoredFormatter(logging.Formatter):
-    """Custom formatter with color support for log levels."""
-
-    COLORS = {
-        "DEBUG": "\033[36m",  # Cyan
-        "INFO": "\033[37m",  # White
-        "WARNING": "\033[33m",  # Yellow
-        "ERROR": "\033[31m",  # Red
-        "CRITICAL": "\033[35m",  # Magenta
-    }
-    RESET = "\033[0m"
-
-    def format(self, record):
-        log_color = self.COLORS.get(record.levelname, self.RESET)
-        record.levelname = f"{log_color}{record.levelname}{self.RESET}"
-        return super().format(record)
-
-
-# Set up logging with color support
+# Configure clean logging - disable the default verbose logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.WARNING,  # Set to WARNING to reduce noise
+    format="%(message)s",  # Simple format
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-# Apply colored formatter to console handler
-console_handler = logging.getLogger().handlers[0]
-console_handler.setFormatter(
-    ColoredFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-)
+# Suppress noisy loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("langgraph").setLevel(logging.WARNING)
+
+
+# Create a custom filter to hide LangGraph debug output
+class LangGraphFilter(logging.Filter):
+    def filter(self, record):
+        # Hide verbose LangGraph state messages
+        if hasattr(record, "getMessage"):
+            message = record.getMessage()
+            if message.startswith("[values]") or message.startswith("[updates]"):
+                return False
+        return True
+
+
+# Apply the filter to the root logger
+for handler in logging.getLogger().handlers:
+    handler.addFilter(LangGraphFilter())
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +56,13 @@ class GitHubAIAgentApp:
 
     def __init__(self):
         """Initialize the application."""
-        log_agent_action("Initializing GitHub AI Agent App", "APP_INIT")
+        log_section_start("GitHub AI Agent Initialization")
 
         self.settings = get_settings()
-        log_info(
-            f"Target repository: {self.settings.target_owner}/{self.settings.target_repo}"
-        )
-        log_info(f"Issue label: {self.settings.issue_label}")
-        log_info(f"OpenAI model: {self.settings.openai_model}")
+        log_info(f"Target: {self.settings.target_owner}/{self.settings.target_repo}")
+        log_info(f"Label filter: '{self.settings.issue_label}'")
+        log_info(f"AI Model: {self.settings.openai_model}")
         log_info(f"Max iterations: {self.settings.max_iterations}")
-        log_info(f"Recursion limit: {self.settings.recursion_limit}")
 
         # Initialize GitHub client - prioritize GitHub App authentication
         if (
@@ -71,22 +73,21 @@ class GitHubAIAgentApp:
             self.github_client = GitHubClient(
                 target_owner=self.settings.target_owner,
                 target_repo=self.settings.target_repo,
+                token=self.settings.github_token,  # Provide token as fallback
                 app_id=self.settings.github_app_id,
                 client_id=self.settings.github_client_id,
                 client_secret=self.settings.github_client_secret,
+                prefer_token=False,  # Prefer GitHub App authentication for main app
             )
-            log_agent_action(
-                "GitHub client initialized with App authentication", "CLIENT_INIT"
-            )
+            log_github_action("Authenticated via GitHub App", "CLIENT_INIT")
         elif self.settings.github_token:
             self.github_client = GitHubClient(
                 target_owner=self.settings.target_owner,
                 target_repo=self.settings.target_repo,
                 token=self.settings.github_token,
+                prefer_token=True,  # Use token if no App credentials available
             )
-            log_agent_action(
-                "GitHub client initialized with token authentication", "CLIENT_INIT"
-            )
+            log_github_action("Authenticated via Personal Token", "CLIENT_INIT")
         else:
             raise ValueError(
                 "Either GitHub App credentials or GitHub token must be provided"
@@ -99,22 +100,22 @@ class GitHubAIAgentApp:
             max_iterations=self.settings.max_iterations,
             recursion_limit=self.settings.recursion_limit,
         )
-        log_agent_action("GitHub Issue Agent initialized", "AGENT_INIT")
+        log_agent_action("AI Agent ready for issue processing", "AGENT_INIT")
 
         self.processed_issues: Set[int] = set()
+        print_separator()
 
     def poll_and_process_issues(self) -> None:
         """Poll for new issues and process them."""
+        log_section_start("Scanning for Issues")
+
         log_agent_action(
-            f"Polling for issues with label '{self.settings.issue_label}' in {self.settings.target_owner}/{self.settings.target_repo}",
-            "POLL",
+            f"Looking for issues labeled '{self.settings.issue_label}'", "POLL"
         )
 
         # Get issues with the specified label
         issues = self.github_client.get_issues_with_label(self.settings.issue_label)
-        log_info(
-            f"Found {len(issues)} total issues with label '{self.settings.issue_label}'"
-        )
+        log_info(f"Found {len(issues)} total issues with target label")
 
         # Filter out already processed issues
         new_issues = [
@@ -122,68 +123,62 @@ class GitHubAIAgentApp:
         ]
 
         if not new_issues:
-            log_info("No new issues found")
+            log_info("No new issues to process")
             return
 
-        log_agent_action(f"Found {len(new_issues)} new issues to process", "NEW_ISSUES")
+        log_agent_action(
+            f"Discovered {len(new_issues)} unprocessed issues", "NEW_ISSUES"
+        )
+        print_separator()
 
         for issue in new_issues:
             try:
-                log_agent_action(
-                    f"Processing issue #{issue.number}: {issue.title}", "ISSUE_START"
-                )
+                log_section_start(f"Processing Issue #{issue.number}")
+                log_agent_action(f"Title: {issue.title}", "ISSUE_START")
 
                 # Create branch immediately after detecting new issue
                 branch_name = f"ai-agent/issue-{issue.number}"
-                log_agent_action(
-                    f"Creating feature branch '{branch_name}' in SAAA repository",
-                    "BRANCH_CREATE_EARLY",
-                )
+                log_github_action(f"Creating branch '{branch_name}'", "BRANCH_CREATE")
 
                 if self.github_client.create_branch(branch_name):
-                    log_info(
-                        f"Successfully created feature branch '{branch_name}' in SAAA repository"
-                    )
+                    log_info(f"Branch '{branch_name}' created successfully")
 
                     # Now process the issue with the pre-created branch
                     result = self.agent.process_issue(issue.number, branch_name)
 
                     if result.success:
                         log_agent_action(
-                            f"Successfully processed issue #{issue.number}, created PR #{result.pr_number}",
+                            f"Issue completed! Created PR #{result.pr_number}",
                             "SUCCESS",
                         )
                         self.processed_issues.add(issue.number)
                     else:
                         log_agent_action(
-                            f"Failed to process issue #{issue.number}: {result.error_message}",
-                            "FAILED",
+                            f"Processing failed: {result.error_message}", "FAILED"
                         )
                 else:
                     log_agent_action(
-                        f"Failed to create branch '{branch_name}' for issue #{issue.number}",
-                        "BRANCH_FAILED",
+                        f"Branch creation failed for issue #{issue.number}", "FAILED"
                     )
-                    # Don't process the issue if branch creation failed
                     continue
+
+                print_separator()
 
             except Exception as e:
                 log_agent_action(
-                    f"Error processing issue #{issue.number}: {e}", "ERROR"
+                    f"Unexpected error processing issue #{issue.number}: {e}", "ERROR"
                 )
+                print_separator()
 
     def run_once(self) -> None:
         """Run the agent once to process current issues."""
-        log_agent_action("Running GitHub AI Agent (single run)", "RUN_ONCE")
+        log_section_start("Single Run Mode")
         self.poll_and_process_issues()
         log_agent_action("Single run completed", "COMPLETE")
 
     def run_daemon(self) -> None:
         """Run the agent as a daemon, continuously polling for issues."""
-        log_agent_action(
-            f"Starting GitHub AI Agent daemon (polling every {self.settings.poll_interval} seconds)",
-            "DAEMON_START",
-        )
+        log_section_start(f"Daemon Mode - Polling every {self.settings.poll_interval}s")
 
         try:
             while True:
@@ -203,21 +198,23 @@ def main() -> None:
     """Main entry point."""
     import sys
 
+    # Print welcome banner
+    print_separator("═", 80)
+    print(
+        f"🤖 {Colors.AGENT_BOLD}GITHUB AI AGENT{Colors.RESET} - Automated Issue Processing"
+    )
+    print_separator("═", 80)
+
     # Set logging level from settings
     settings = get_settings()
     logging.getLogger().setLevel(settings.log_level)
-
-    log_agent_action("Starting GitHub AI Agent application", "APP_START")
-    log_info(f"Log level: {settings.log_level}")
 
     app = GitHubAIAgentApp()
 
     # Check command line arguments
     if len(sys.argv) > 1 and sys.argv[1] == "--daemon":
-        log_agent_action("Running in daemon mode", "MODE")
         app.run_daemon()
     else:
-        log_agent_action("Running in single-run mode", "MODE")
         app.run_once()
 
 

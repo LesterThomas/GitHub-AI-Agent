@@ -44,19 +44,75 @@ def main():
     target_owner = os.getenv("TARGET_OWNER", "LesterThomas")  # Default fallback
     target_repo = os.getenv("TARGET_REPO", "SAAA")  # Default fallback
 
-    if not github_token:
-        print("Error: GITHUB_TOKEN environment variable is required")
+    # Get GitHub App credentials (as fallback if token fails)
+    github_app_id = os.getenv("GITHUB_APP_ID")
+    github_client_id = os.getenv("GITHUB_CLIENT_ID")
+    github_client_secret = os.getenv("GITHUB_CLIENT_SECRET")
+
+    if not github_token and not (
+        github_app_id and github_client_id and github_client_secret
+    ):
+        print("Error: Either GITHUB_TOKEN or GitHub App credentials are required")
         print("Create a .env file with GITHUB_TOKEN=your_token")
+        print(
+            "Or ensure GITHUB_APP_ID, GITHUB_CLIENT_ID, and GITHUB_CLIENT_SECRET are set"
+        )
         print("Run 'python reset_saaa_repo.py --help' for more information")
         sys.exit(1)
 
-    # Initialize GitHub client using environment variables
-    client = GitHubClient(
-        token=github_token, target_owner=target_owner, target_repo=target_repo
-    )
+    # Initialize GitHub client - prefer token if available and valid, fallback to GitHub App
+    client = None
+    auth_method = "unknown"
+
+    if github_token:
+        try:
+            print("🔑 Attempting token authentication...")
+            client = GitHubClient(
+                target_owner=target_owner,
+                target_repo=target_repo,
+                token=github_token,
+                app_id=github_app_id,
+                client_id=github_client_id,
+                client_secret=github_client_secret,
+                prefer_token=True,
+            )
+            # Test the connection
+            _ = client.repo.full_name
+            auth_method = "GitHub Token"
+            print("✅ Token authentication successful")
+        except Exception as e:
+            print(f"⚠️ Token authentication failed: {e}")
+            client = None
+
+    # Fallback to GitHub App if token failed or not available
+    if client is None and github_app_id and github_client_id and github_client_secret:
+        try:
+            print("🔑 Falling back to GitHub App authentication...")
+            client = GitHubClient(
+                target_owner=target_owner,
+                target_repo=target_repo,
+                token=github_token,
+                app_id=github_app_id,
+                client_id=github_client_id,
+                client_secret=github_client_secret,
+                prefer_token=False,
+            )
+            # Test the connection
+            _ = client.repo.full_name
+            auth_method = "GitHub App"
+            print("✅ GitHub App authentication successful")
+        except Exception as e:
+            print(f"❌ GitHub App authentication also failed: {e}")
+            client = None
+
+    if client is None:
+        print("❌ Error: Unable to authenticate with GitHub using any available method")
+        print("Please check your credentials in the .env file")
+        sys.exit(1)
 
     print("🔄 Starting SAAA repository reset...")
     print(f"📁 Target repository: {target_owner}/{target_repo}")
+    print(f"🔐 Authentication method: {auth_method}")
 
     # Step 1: Get and close all open issues
     print("\n📋 Step 1: Closing all open issues...")

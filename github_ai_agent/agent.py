@@ -5,6 +5,8 @@ import json
 import logging
 import re
 import sys
+import contextlib
+import io
 from dataclasses import dataclass
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
@@ -17,8 +19,43 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 
 from .github_client import GitHubClient
+from .logging_utils import (
+    Colors, log_agent_action, log_github_action, log_llm_interaction,
+    log_tool_usage, log_error, log_info, log_section_start, print_separator,
+    pretty_print_json
+)
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def suppress_langgraph_output():
+    """Context manager to suppress LangGraph's verbose output."""
+    class FilteredStream:
+        def __init__(self, stream):
+            self.stream = stream
+            
+        def write(self, text):
+            # Filter out LangGraph debug messages
+            if not (text.startswith('[values]') or text.startswith('[updates]') or 
+                   text.strip().startswith('{')):
+                self.stream.write(text)
+                
+        def flush(self):
+            self.stream.flush()
+            
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+    
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    try:
+        sys.stdout = FilteredStream(old_stdout)
+        sys.stderr = FilteredStream(old_stderr)
+        yield
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
 
 
 def pretty_print_json(data: Any) -> str:
@@ -43,207 +80,191 @@ class Colors:
 
     RESET = "\033[0m"
     BOLD = "\033[1m"
+    DIM = "\033[2m"
 
-    # Agent colors
-    AGENT = "\033[94m"  # Blue
-    AGENT_BOLD = "\033[1;94m"
+    # Modern color palette
+    AGENT = "\033[38;5;45m"    # Bright cyan
+    AGENT_BOLD = "\033[1;38;5;45m"
+    
+    LLM = "\033[38;5;10m"      # Bright green  
+    LLM_BOLD = "\033[1;38;5;10m"
+    
+    TOOL = "\033[38;5;213m"    # Pink/magenta
+    TOOL_BOLD = "\033[1;38;5;213m"
+    
+    SUCCESS = "\033[38;5;46m"  # Bright green
+    SUCCESS_BOLD = "\033[1;38;5;46m"
+    
+    ERROR = "\033[38;5;196m"   # Bright red
+    ERROR_BOLD = "\033[1;38;5;196m"
+    
+    WARNING = "\033[38;5;214m" # Orange
+    WARNING_BOLD = "\033[1;38;5;214m"
+    
+    INFO = "\033[38;5;117m"    # Light blue
+    INFO_BOLD = "\033[1;38;5;117m"
+    
+    GITHUB = "\033[38;5;208m"  # Orange
+    GITHUB_BOLD = "\033[1;38;5;208m"
+    
+    # UI Elements
+    BORDER = "\033[38;5;240m"  # Dark gray
+    SEPARATOR = "─"
+    ARROW = "→"
+    BULLET = "•"
 
-    # LLM colors
-    LLM = "\033[92m"  # Green
-    LLM_BOLD = "\033[1;92m"
 
-    # Tool colors
-    TOOL = "\033[95m"  # Magenta
-    TOOL_BOLD = "\033[1;95m"
+def get_timestamp():
+    """Get a formatted timestamp."""
+    from datetime import datetime
+    return datetime.now().strftime("%H:%M:%S")
 
-    # Error colors
-    ERROR = "\033[91m"  # Red
-    ERROR_BOLD = "\033[1;91m"
 
-    # Warning colors
-    WARNING = "\033[93m"  # Yellow
-    WARNING_BOLD = "\033[1;93m"
-
-    # Info colors
-    INFO = "\033[96m"  # Cyan
-    INFO_BOLD = "\033[1;96m"
+def print_separator(char="─", length=80, color=None):
+    """Print a visual separator line."""
+    if color:
+        print(f"{color}{char * length}{Colors.RESET}")
+    else:
+        print(f"{Colors.BORDER}{char * length}{Colors.RESET}")
 
 
 def log_agent_action(message: str, action_type: str = "ACTION"):
-    """Log agent actions with color coding."""
-    timestamp = logging.Formatter().formatTime(
-        logging.LogRecord(
-            name="",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="",
-            args=(),
-            exc_info=None,
-        ),
-        "%H:%M:%S",
-    )
+    """Log agent actions with enhanced formatting and color coding."""
+    timestamp = get_timestamp()
+    
+    # Special handling for different action types
+    icon_map = {
+        "APP_START": "🚀",
+        "APP_INIT": "⚙️",
+        "CLIENT_INIT": "🔗",
+        "AGENT_INIT": "🤖",
+        "POLL": "�",
+        "NEW_ISSUES": "📝",
+        "ISSUE_START": "🎯",
+        "BRANCH_CREATE_EARLY": "🌿",
+        "SUCCESS": "✅",
+        "FAILED": "❌",
+        "ERROR": "💥",
+        "COMPLETE": "🏁",
+        "MODE": "⚡",
+        "RUN_ONCE": "▶️",
+        "DAEMON_START": "🔄",
+        "SHUTDOWN": "🛑",
+    }
+    
+    icon = icon_map.get(action_type, "🔹")
+    
+    # Format based on action importance
+    if action_type in ["SUCCESS", "COMPLETE"]:
+        color = Colors.SUCCESS_BOLD
+        border_color = Colors.SUCCESS
+    elif action_type in ["ERROR", "FAILED"]:
+        color = Colors.ERROR_BOLD
+        border_color = Colors.ERROR
+    elif action_type in ["APP_START", "APP_INIT", "ISSUE_START"]:
+        color = Colors.AGENT_BOLD
+        border_color = Colors.AGENT
+    else:
+        color = Colors.AGENT
+        border_color = Colors.AGENT
+    
+    # Print formatted message
+    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {color}{message}{Colors.RESET}")
 
-    logger.info(
-        f"{Colors.AGENT_BOLD}AGENT {action_type}:{Colors.RESET} {Colors.AGENT}{message}{Colors.RESET}"
-    )
+
+def log_github_action(message: str, action_type: str = "GITHUB"):
+    """Log GitHub-specific actions."""
+    timestamp = get_timestamp()
+    icon = "🐙"  # GitHub octopus
+    
+    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {Colors.GITHUB}{message}{Colors.RESET}")
 
 
 def log_llm_interaction(message: str, interaction_type: str = "RESPONSE"):
-    """Log LLM interactions with enhanced color coding and formatting."""
-
-    # Handle special interaction types
-    if interaction_type == "REQUEST_START":
-        logger.info(f"{Colors.INFO_BOLD}{'🚀 LLM REQUEST START'}{Colors.RESET}")
-        logger.info(f"{Colors.INFO}{message}{Colors.RESET}")
-        return
-    elif interaction_type == "REQUEST_END":
-        logger.info(f"{Colors.INFO}{message}{Colors.RESET}")
-        logger.info(f"{Colors.INFO_BOLD}{'🏁 LLM REQUEST END'}{Colors.RESET}")
-        return
-
-    # Different colors for different interaction types
+    """Log LLM interactions with clean, readable formatting."""
+    timestamp = get_timestamp()
+    
     if interaction_type == "REQUEST":
+        icon = "🧠➡️"
         color = Colors.INFO
-        color_bold = Colors.INFO_BOLD
-        icon = "🤖➡️"  # Human to AI
-        prefix = "USER → LLM"
-    else:  # RESPONSE
+        label = "AI REQUEST"
+    elif interaction_type == "RESPONSE":
+        icon = "🧠⬅️"  
         color = Colors.LLM
-        color_bold = Colors.LLM_BOLD
-        icon = "🤖⬅️"  # AI response
-        prefix = "LLM → USER"
-
-    # Format the message with proper line breaks and indentation
-    lines = message.split("\n")
-    if len(lines) > 1:
-        # Multi-line message formatting
-        formatted_lines = []
-        for i, line in enumerate(lines):
-            if i == 0:
-                # First line with header
-                truncated_line = line[:400] + "..." if len(line) > 400 else line
-                formatted_lines.append(
-                    f"{color_bold}{prefix}:{Colors.RESET} {color}{truncated_line}{Colors.RESET}"
-                )
-            else:
-                # Subsequent lines with indentation
-                if line.strip():  # Only show non-empty lines
-                    truncated_line = line[:400] + "..." if len(line) > 400 else line
-                    formatted_lines.append(f"{color}    {truncated_line}{Colors.RESET}")
-
-        # Log each line separately for better readability
-        for line in formatted_lines[:10]:  # Limit to first 10 lines
-            logger.info(line)
-
-        if len(formatted_lines) > 10:
-            logger.info(
-                f"{color}    ... ({len(formatted_lines) - 10} more lines truncated){Colors.RESET}"
-            )
+        label = "AI RESPONSE"
+    elif interaction_type == "THINKING":
+        icon = "🤔"
+        color = Colors.LLM_BOLD
+        label = "AI THINKING"
     else:
-        # Single line message
-        display_message = message[:500] + "..." if len(message) > 500 else message
-        logger.info(
-            f"{color_bold}{prefix}:{Colors.RESET} {color}{display_message}{Colors.RESET}"
-        )
-
-    # Add a subtle separator for better visual distinction
-    if interaction_type == "RESPONSE":
-        logger.info(f"{Colors.LLM}{'─' * 60}{Colors.RESET}")
+        icon = "🧠"
+        color = Colors.LLM
+        label = "AI"
+    
+    # Truncate long messages for readability
+    display_message = message
+    if len(message) > 150:
+        display_message = message[:147] + "..."
+    
+    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {color}{display_message}{Colors.RESET}")
 
 
 def log_tool_usage(tool_name: str, input_data: str, output_data: str):
-    """Log tool usage with color coding and pretty-printed JSON."""
-    timestamp = logging.Formatter().formatTime(
-        logging.LogRecord(
-            name="",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="",
-            args=(),
-            exc_info=None,
-        ),
-        "%H:%M:%S",
-    )
-
-    # Pretty print JSON if possible, otherwise truncate for console display
-    try:
-        # Try to pretty print input if it's JSON
-        if input_data.strip().startswith(("[", "{")):
-            display_input = pretty_print_json(input_data)
+    """Log tool usage with clean, formatted output."""
+    timestamp = get_timestamp()
+    icon = "🔧"
+    
+    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {Colors.TOOL_BOLD}TOOL {tool_name}{Colors.RESET}")
+    
+    # Show truncated input/output for readability
+    if input_data:
+        truncated_input = input_data[:100] + "..." if len(input_data) > 100 else input_data
+        print(f"   {Colors.TOOL}└─ Input: {truncated_input}{Colors.RESET}")
+    
+    if output_data:
+        truncated_output = output_data[:100] + "..." if len(output_data) > 100 else output_data
+        if "success" in output_data.lower() and "true" in output_data.lower():
+            print(f"   {Colors.SUCCESS}└─ ✅ {truncated_output}{Colors.RESET}")
+        elif "error" in output_data.lower() or "failed" in output_data.lower():
+            print(f"   {Colors.ERROR}└─ ❌ {truncated_output}{Colors.RESET}")
         else:
-            display_input = (
-                input_data[:200] + "..." if len(input_data) > 200 else input_data
-            )
-    except:
-        display_input = (
-            input_data[:200] + "..." if len(input_data) > 200 else input_data
-        )
-
-    try:
-        # Try to pretty print output if it's JSON
-        if output_data.strip().startswith(("[", "{")):
-            display_output = pretty_print_json(output_data)
-        else:
-            display_output = (
-                output_data[:200] + "..." if len(output_data) > 200 else output_data
-            )
-    except:
-        display_output = (
-            output_data[:200] + "..." if len(output_data) > 200 else output_data
-        )
-
-    logger.info(f"{Colors.TOOL_BOLD}TOOL {tool_name}:{Colors.RESET}")
-    logger.info(f"{Colors.TOOL}  Input:{Colors.RESET}")
-    for line in display_input.split("\n"):
-        if line.strip():
-            logger.info(f"{Colors.TOOL}    {line}{Colors.RESET}")
-    logger.info(f"{Colors.TOOL}  Output:{Colors.RESET}")
-    for line in display_output.split("\n"):
-        if line.strip():
-            logger.info(f"{Colors.TOOL}    {line}{Colors.RESET}")
+            print(f"   {Colors.TOOL}└─ Output: {truncated_output}{Colors.RESET}")
 
 
 def log_error(message: str, error_type: str = "ERROR"):
-    """Log errors with color coding."""
-    timestamp = logging.Formatter().formatTime(
-        logging.LogRecord(
-            name="",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="",
-            args=(),
-            exc_info=None,
-        ),
-        "%H:%M:%S",
-    )
-
-    logger.error(
-        f"{Colors.ERROR_BOLD}{error_type}:{Colors.RESET} {Colors.ERROR}{message}{Colors.RESET}"
-    )
-    logger.error(f"{error_type}: {message}")
+    """Log errors with prominent formatting."""
+    timestamp = get_timestamp()
+    icon = "💥" if error_type == "ERROR" else "⚠️"
+    
+    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {Colors.ERROR_BOLD}{message}{Colors.RESET}")
 
 
 def log_info(message: str, info_type: str = "INFO"):
-    """Log general information with color coding."""
-    timestamp = logging.Formatter().formatTime(
-        logging.LogRecord(
-            name="",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="",
-            args=(),
-            exc_info=None,
-        ),
-        "%H:%M:%S",
-    )
+    """Log general information with clean formatting."""
+    timestamp = get_timestamp()
+    
+    # Choose appropriate icon and color based on content
+    if "successfully" in message.lower() or "created" in message.lower():
+        icon = "✅"
+        color = Colors.SUCCESS
+    elif "repository" in message.lower() or "github" in message.lower():
+        icon = "🐙"
+        color = Colors.GITHUB
+    elif "file" in message.lower():
+        icon = "📄"
+        color = Colors.INFO
+    else:
+        icon = "ℹ️"
+        color = Colors.INFO
+    
+    print(f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {color}{message}{Colors.RESET}")
 
-    logger.info(
-        f"{Colors.INFO_BOLD}{info_type}:{Colors.RESET} {Colors.INFO}{message}{Colors.RESET}"
-    )
+
+def log_section_start(title: str):
+    """Log the start of a major section with visual emphasis."""
+    print_separator("═", 60, Colors.AGENT)
+    print(f"{Colors.AGENT_BOLD}🎯 {title.upper()}{Colors.RESET}")
+    print_separator("─", 60, Colors.AGENT)
 
 
 class AgentState(TypedDict):
@@ -632,18 +653,19 @@ Use the create_files_from_request tool with proper JSON formatting."""
             step_count = 0
 
             try:
-                for chunk in self.agent.stream(
-                    initial_state, config, stream_mode=["values", "updates"], debug=True
-                ):
-                    step_count += 1
+                with suppress_langgraph_output():
+                    for chunk in self.agent.stream(
+                        initial_state, config, stream_mode=["values"], debug=False
+                    ):
+                        step_count += 1
 
-                    # Handle different chunk formats
-                    if isinstance(chunk, tuple) and len(chunk) == 2:
-                        mode, data = chunk
-                        if mode == "values":
-                            final_state = data
-                    elif isinstance(chunk, dict):
-                        final_state = chunk
+                        # Handle different chunk formats
+                        if isinstance(chunk, tuple) and len(chunk) == 2:
+                            mode, data = chunk
+                            if mode == "values":
+                                final_state = data
+                        elif isinstance(chunk, dict):
+                            final_state = chunk
 
                 log_agent_action(
                     f"Agent execution completed after {step_count} steps",
@@ -911,12 +933,8 @@ Use the create_files_from_request tool with proper JSON formatting."""
             for chunk in self.agent.stream(
                 initial_state,
                 config,
-                stream_mode=[
-                    "values",
-                    "updates",
-                    "debug",
-                ],  # Multiple stream modes for comprehensive logging
-                debug=True,
+                stream_mode=["values"],  # Clean output mode
+                debug=False,
             ):
                 step_count += 1
 
@@ -1509,8 +1527,8 @@ def run_with_comprehensive_logging(agent, initial_state, config):
         for chunk in agent.stream(
             initial_state,
             config,
-            stream_mode=["values", "updates", "debug"],  # Use multiple modes
-            debug=True,
+            stream_mode=["values"],  # Clean output mode
+            debug=False,
         ):
             step_count += 1
 
