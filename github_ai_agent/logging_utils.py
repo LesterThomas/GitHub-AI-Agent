@@ -130,30 +130,57 @@ def log_github_action(message: str, action_type: str = "GITHUB"):
     )
 
 
-def log_llm_interaction(message: str, interaction_type: str = "RESPONSE"):
+def log_llm_interaction(message, interaction_type: str = "RESPONSE"):
     """Log LLM interactions with clean, readable formatting."""
     timestamp = get_timestamp()
+    icon = "🧠"  # Brain icon for LLM
+    color = Colors.LLM
 
-    if interaction_type == "REQUEST":
-        icon = "🧠➡️"
-        color = Colors.INFO
-        label = "AI REQUEST"
-    elif interaction_type == "RESPONSE":
-        icon = "🧠⬅️"
-        color = Colors.LLM
-        label = "AI RESPONSE"
-    elif interaction_type == "THINKING":
-        icon = "🤔"
-        color = Colors.LLM_BOLD
-        label = "AI THINKING"
+    # Handle different message types
+    if hasattr(message, "content") or hasattr(message, "tool_calls"):
+        # This is a LangChain message object
+        content_parts = []
+
+        # Handle content
+        if hasattr(message, "content") and message.content:
+            content_text = message.content.strip()
+            if content_text:
+                # Format as markdown for better readability
+                content_parts.append(content_text)
+
+        # Handle tool calls
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            tool_calls_text = "Tool Calls:"
+            for i, tool_call in enumerate(message.tool_calls, 1):
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+
+                tool_calls_text += f"\n  {i}. **{tool_name}** "
+                if tool_args:
+                    # Pretty print the arguments
+                    args_str = pretty_print_json(tool_args)
+                    tool_calls_text += f"\n     Args: {args_str}"
+            content_parts.append(tool_calls_text)
+
+        if content_parts:
+            display_message = "\n".join(content_parts)
+        else:
+            display_message = "[Empty message]"
     else:
-        icon = "🧠"
-        color = Colors.LLM
-        label = "AI"
+        # Fallback for string messages
+        display_message = str(message)
 
+    # Print header
     print(
-        f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {interaction_type} {color}{message}{Colors.RESET}"
+        f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {color}{interaction_type}{Colors.RESET}"
     )
+
+    # Print content with proper indentation
+    for line in display_message.split("\n"):
+        print(f"    {line}")
+
+    # Print separator for readability
+    print(f"{Colors.DIM}{'─' * 50}{Colors.RESET}")
 
 
 def log_tool_usage(tool_name: str, message: str, type: str = "INFO"):
