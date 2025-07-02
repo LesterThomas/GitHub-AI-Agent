@@ -50,18 +50,18 @@ class GitHubClient:
 
         # Choose authentication method based on preference and availability
         if prefer_token and token:
-            logger.info("Using GitHub token authentication (preferred)")
+            log_github_action("Using GitHub token authentication (preferred)")
             self.github = Github(token)
         elif not prefer_token and app_id and client_id and client_secret:
-            logger.info("Using GitHub App authentication (preferred)")
+            log_github_action("Using GitHub App authentication (preferred)")
             self.github = self._create_github_app_client(
                 app_id, client_id, client_secret, private_key_path
             )
         elif token:
-            logger.info("Using GitHub token authentication (fallback)")
+            log_github_action("Using GitHub token authentication (fallback)")
             self.github = Github(token)
         elif app_id and client_id and client_secret:
-            logger.info("Using GitHub App authentication (fallback)")
+            log_github_action("Using GitHub App authentication (fallback)")
             self.github = self._create_github_app_client(
                 app_id, client_id, client_secret, private_key_path
             )
@@ -82,7 +82,7 @@ class GitHubClient:
         for key_file in key_files:
             key_path = Path(key_file)
             if key_path.exists():
-                logger.info(f"Found private key file: {key_path}")
+                log_github_action(f"Found private key file: {key_path}")
                 return str(key_path)
 
         logger.warning("No private key file found")
@@ -114,11 +114,11 @@ class GitHubClient:
 
             # Generate JWT token using RS256 algorithm
             jwt_token = jwt.encode(payload, private_key, algorithm="RS256")
-            logger.info("Successfully generated JWT token")
+            log_github_action("Successfully generated JWT token")
             return jwt_token
 
         except Exception as e:
-            logger.error(f"Failed to generate JWT token: {e}")
+            log_error(f"Failed to generate JWT token: {e}")
             raise
 
     def _get_installation_id(self, jwt_token: str) -> int:
@@ -145,12 +145,12 @@ class GitHubClient:
             if response.status_code == 200:
                 installation_data = response.json()
                 installation_id = installation_data["id"]
-                logger.info(
+                log_github_action(
                     f"Found installation ID {installation_id} for repository {self.target_owner}/{self.target_repo}"
                 )
                 return installation_id
             else:
-                logger.error(
+                log_error(
                     f"Failed to get installation for repository: {response.status_code} - {response.text}"
                 )
 
@@ -167,7 +167,7 @@ class GitHubClient:
 
                 if response.status_code == 200:
                     installations = response.json()
-                    logger.info(f"Found {len(installations)} installations")
+                    log_github_action(f"Found {len(installations)} installations")
 
                     for installation in installations:
                         # Check if this installation has access to our target repository
@@ -175,7 +175,7 @@ class GitHubClient:
                             installation.get("account", {}).get("login")
                             == self.target_owner
                         ):
-                            logger.info(
+                            log_github_action(
                                 f"Found matching installation for owner {self.target_owner}"
                             )
                             return installation["id"]
@@ -190,7 +190,7 @@ class GitHubClient:
                 response.raise_for_status()
 
         except Exception as e:
-            logger.error(f"Failed to get installation ID: {e}")
+            log_error(f"Failed to get installation ID: {e}")
             raise
 
     def _generate_installation_access_token(
@@ -228,18 +228,18 @@ class GitHubClient:
                 token_data = response.json()
                 access_token = token_data["token"]
                 expires_at = token_data.get("expires_at", "Unknown")
-                logger.info(
+                log_github_action(
                     f"Successfully generated installation access token (expires: {expires_at})"
                 )
                 return access_token
             else:
-                logger.error(
+                log_error(
                     f"Failed to generate installation access token: {response.status_code} - {response.text}"
                 )
                 response.raise_for_status()
 
         except Exception as e:
-            logger.error(f"Failed to generate installation access token: {e}")
+            log_error(f"Failed to generate installation access token: {e}")
             raise
 
     def _create_github_app_client(
@@ -260,13 +260,15 @@ class GitHubClient:
         Returns:
             Authenticated GitHub client
         """
-        logger.info(f"Attempting GitHub App authentication for App ID: {app_id}")
+        log_github_action(f"Attempting GitHub App authentication for App ID: {app_id}")
 
         try:
             # Method 1: Proper GitHub App authentication with private key
             key_path = private_key_path or self._find_private_key()
             if key_path:
-                logger.info(f"Using private key authentication with file: {key_path}")
+                log_github_action(
+                    f"Using private key authentication with file: {key_path}"
+                )
 
                 # Generate JWT token
                 jwt_token = self._generate_jwt_token(app_id, key_path)
@@ -281,42 +283,48 @@ class GitHubClient:
 
                 # Create GitHub client with installation access token
                 github_client = Github(access_token)
-                logger.info(f"Successfully authenticated GitHub App as installation")
+                log_github_action(
+                    f"Successfully authenticated GitHub App as installation"
+                )
                 return github_client
 
         except Exception as e:
-            logger.error(f"GitHub App private key authentication failed: {e}")
+            log_error(f"GitHub App private key authentication failed: {e}")
             logger.debug(f"Full error: {e}", exc_info=True)
 
         # Method 2: Fallback - check if client_secret is actually a PAT
         if client_secret.startswith("ghp_") or client_secret.startswith("github_pat_"):
-            logger.info("Client secret appears to be a Personal Access Token")
+            log_github_action("Client secret appears to be a Personal Access Token")
             try:
                 github_client = Github(client_secret)
                 user = github_client.get_user()
-                logger.info(f"Successfully authenticated as user: {user.login}")
+                log_github_action(f"Successfully authenticated as user: {user.login}")
                 return github_client
             except Exception as e:
-                logger.error(f"PAT authentication failed: {e}")
+                log_error(f"PAT authentication failed: {e}")
 
         # Method 3: Fallback - try using client_secret directly as token
         try:
-            logger.info("Fallback: trying client_secret as direct token")
+            log_github_action("Fallback: trying client_secret as direct token")
             github_client = Github(client_secret)
             user = github_client.get_user()
-            logger.info(f"Successfully authenticated as user: {user.login}")
+            log_github_action(f"Successfully authenticated as user: {user.login}")
             return github_client
         except Exception as e:
             logger.debug(f"Direct token fallback failed: {e}")
 
         # If all methods fail, provide helpful error message
-        logger.error("All GitHub App authentication methods failed.")
-        logger.info("GitHub App Authentication Failed - Possible Solutions:")
-        logger.info("1. Ensure your private key file is accessible")
-        logger.info("2. Verify your GitHub App is installed on the target repository")
-        logger.info("3. Check that your GitHub App has the correct permissions")
-        logger.info("4. Verify the App ID and Client ID are correct")
-        logger.info("5. Consider using a Personal Access Token in GITHUB_TOKEN instead")
+        log_error("All GitHub App authentication methods failed.")
+        log_github_action("GitHub App Authentication Failed - Possible Solutions:")
+        log_github_action("1. Ensure your private key file is accessible")
+        log_github_action(
+            "2. Verify your GitHub App is installed on the target repository"
+        )
+        log_github_action("3. Check that your GitHub App has the correct permissions")
+        log_github_action("4. Verify the App ID and Client ID are correct")
+        log_github_action(
+            "5. Consider using a Personal Access Token in GITHUB_TOKEN instead"
+        )
 
         raise ValueError("GitHub App authentication failed. See logs for details.")
 
@@ -341,7 +349,7 @@ class GitHubClient:
             issues = self.repo.get_issues(state=state, labels=[label])
             return list(issues)
         except GithubException as e:
-            logger.error(f"Error fetching issues: {e}")
+            log_error(f"Error fetching issues: {e}")
             return []
 
     def get_issue(self, issue_number: int) -> Optional[Issue]:
@@ -356,7 +364,7 @@ class GitHubClient:
         try:
             return self.repo.get_issue(issue_number)
         except GithubException as e:
-            logger.error(f"Error fetching issue {issue_number}: {e}")
+            log_error(f"Error fetching issue {issue_number}: {e}")
             return None
 
     def create_pull_request(
@@ -375,20 +383,22 @@ class GitHubClient:
             PullRequest object or None if creation failed
         """
         try:
-            logger.info(
+            log_github_action(
                 f"Creating pull request in {self.target_owner}/{self.target_repo}: '{title}'"
             )
-            logger.info(f"PR details - Head: {head}, Base: {base}, Draft: {draft}")
+            log_github_action(
+                f"PR details - Head: {head}, Base: {base}, Draft: {draft}"
+            )
             pr = self.repo.create_pull(
                 title=title, body=body, head=head, base=base, draft=draft
             )
-            logger.info(
+            log_github_action(
                 f"Successfully created pull request #{pr.number} in {self.target_owner}/{self.target_repo}: {title}"
             )
-            logger.info(f"Pull request URL: {pr.html_url}")
+            log_github_action(f"Pull request URL: {pr.html_url}")
             return pr
         except GithubException as e:
-            logger.error(
+            log_error(
                 f"Error creating pull request in {self.target_owner}/{self.target_repo}: {e}"
             )
             return None
@@ -404,19 +414,19 @@ class GitHubClient:
             True if successful, False otherwise
         """
         try:
-            logger.info(
+            log_github_action(
                 f"Creating branch '{branch_name}' in {self.target_owner}/{self.target_repo} from '{from_branch}'"
             )
             ref = self.repo.get_git_ref(f"heads/{from_branch}")
             self.repo.create_git_ref(
                 ref=f"refs/heads/{branch_name}", sha=ref.object.sha
             )
-            logger.info(
+            log_github_action(
                 f"Successfully created branch '{branch_name}' in {self.target_owner}/{self.target_repo}"
             )
             return True
         except GithubException as e:
-            logger.error(
+            log_error(
                 f"Error creating branch '{branch_name}' in {self.target_owner}/{self.target_repo}: {e}"
             )
             return False
@@ -436,7 +446,7 @@ class GitHubClient:
             True if successful, False otherwise
         """
         try:
-            logger.info(
+            log_github_action(
                 f"Creating/updating file '{path}' in {self.target_owner}/{self.target_repo} on branch '{branch}'"
             )
             # Try to get existing file
@@ -450,7 +460,7 @@ class GitHubClient:
                     sha=file_obj.sha,
                     branch=branch,
                 )
-                logger.info(
+                log_github_action(
                     f"Updated file '{path}' in {self.target_owner}/{self.target_repo}"
                 )
             except GithubException:
@@ -458,12 +468,12 @@ class GitHubClient:
                 self.repo.create_file(
                     path=path, message=message, content=content, branch=branch
                 )
-                logger.info(
+                log_github_action(
                     f"Created file '{path}' in {self.target_owner}/{self.target_repo}"
                 )
             return True
         except GithubException as e:
-            logger.error(
+            log_error(
                 f"Error creating/updating file '{path}' in {self.target_owner}/{self.target_repo}: {e}"
             )
             return False
@@ -482,11 +492,11 @@ class GitHubClient:
             issue = self.get_issue(issue_number)
             if issue:
                 issue.create_comment(comment)
-                logger.info(f"Added comment to issue #{issue_number}")
+                log_github_action(f"Added comment to issue #{issue_number}")
                 return True
             return False
         except GithubException as e:
-            logger.error(f"Error adding comment to issue {issue_number}: {e}")
+            log_error(f"Error adding comment to issue {issue_number}: {e}")
             return False
 
     def close_issue(self, issue_number: int) -> bool:
@@ -502,11 +512,11 @@ class GitHubClient:
             issue = self.get_issue(issue_number)
             if issue:
                 issue.edit(state="closed")
-                logger.info(f"Closed issue #{issue_number}")
+                log_github_action(f"Closed issue #{issue_number}")
                 return True
             return False
         except GithubException as e:
-            logger.error(f"Error closing issue {issue_number}: {e}")
+            log_error(f"Error closing issue {issue_number}: {e}")
             return False
 
     def get_pull_requests(self, state: str = "open") -> List[PullRequest]:
@@ -522,7 +532,7 @@ class GitHubClient:
             pull_requests = self.repo.get_pulls(state=state)
             return list(pull_requests)
         except GithubException as e:
-            logger.error(f"Error fetching pull requests: {e}")
+            log_error(f"Error fetching pull requests: {e}")
             return []
 
     def close_pull_request(self, pr_number: int) -> bool:
@@ -538,11 +548,11 @@ class GitHubClient:
             pr = self.repo.get_pull(pr_number)
             if pr:
                 pr.edit(state="closed")
-                logger.info(f"Closed pull request #{pr_number}")
+                log_github_action(f"Closed pull request #{pr_number}")
                 return True
             return False
         except GithubException as e:
-            logger.error(f"Error closing pull request {pr_number}: {e}")
+            log_error(f"Error closing pull request {pr_number}: {e}")
             return False
 
     def create_issue(
@@ -559,14 +569,14 @@ class GitHubClient:
             Issue object or None if creation failed
         """
         try:
-            logger.info(
+            log_github_action(
                 f"Creating issue in {self.target_owner}/{self.target_repo}: '{title}'"
             )
             issue = self.repo.create_issue(title=title, body=body, labels=labels or [])
-            logger.info(f"Successfully created issue #{issue.number}: {title}")
+            log_github_action(f"Successfully created issue #{issue.number}: {title}")
             return issue
         except GithubException as e:
-            logger.error(
+            log_error(
                 f"Error creating issue in {self.target_owner}/{self.target_repo}: {e}"
             )
             return None

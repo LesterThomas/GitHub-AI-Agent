@@ -100,7 +100,6 @@ class GitHubAIAgentApp:
             max_iterations=self.settings.max_iterations,
             recursion_limit=self.settings.recursion_limit,
         )
-        log_agent_action("AI Agent ready for issue processing", "AGENT_INIT")
 
         self.processed_issues: Set[int] = set()
         print_separator()
@@ -109,13 +108,10 @@ class GitHubAIAgentApp:
         """Poll for new issues and process them."""
         log_section_start("Scanning for Issues")
 
-        log_agent_action(
-            f"Looking for issues labeled '{self.settings.issue_label}'", "POLL"
-        )
+        log_info(f"Looking for issues labeled '{self.settings.issue_label}'", "POLL")
 
         # Get issues with the specified label
         issues = self.github_client.get_issues_with_label(self.settings.issue_label)
-        log_info(f"Found {len(issues)} total issues with target label")
 
         # Filter out already processed issues
         new_issues = [
@@ -126,38 +122,37 @@ class GitHubAIAgentApp:
             log_info("No new issues to process")
             return
 
-        log_agent_action(
-            f"Discovered {len(new_issues)} unprocessed issues", "NEW_ISSUES"
-        )
+        log_info(f"Discovered {len(new_issues)} unprocessed issues", "NEW_ISSUES")
         print_separator()
 
         for issue in new_issues:
             try:
-                log_section_start(f"Processing Issue #{issue.number}")
-                log_agent_action(f"Title: {issue.title}", "ISSUE_START")
+                log_section_start(
+                    f"Processing Issue #{issue.number} Title: {issue.title}"
+                )
 
                 # Create branch immediately after detecting new issue
                 branch_name = f"ai-agent/issue-{issue.number}"
                 log_github_action(f"Creating branch '{branch_name}'", "BRANCH_CREATE")
 
                 if self.github_client.create_branch(branch_name):
-                    log_info(f"Branch '{branch_name}' created successfully")
+                    log_github_action(f"Branch '{branch_name}' created successfully")
 
                     # Now process the issue with the pre-created branch
                     result = self.agent.process_issue(issue.number, branch_name)
 
                     if result.success:
-                        log_agent_action(
+                        log_github_action(
                             f"Issue completed! Created PR #{result.pr_number}",
                             "SUCCESS",
                         )
                         self.processed_issues.add(issue.number)
                     else:
-                        log_agent_action(
+                        log_github_action(
                             f"Processing failed: {result.error_message}", "FAILED"
                         )
                 else:
-                    log_agent_action(
+                    log_github_action(
                         f"Branch creation failed for issue #{issue.number}", "FAILED"
                     )
                     continue
@@ -165,7 +160,7 @@ class GitHubAIAgentApp:
                 print_separator()
 
             except Exception as e:
-                log_agent_action(
+                log_github_action(
                     f"Unexpected error processing issue #{issue.number}: {e}", "ERROR"
                 )
                 print_separator()
@@ -174,7 +169,7 @@ class GitHubAIAgentApp:
         """Run the agent once to process current issues."""
         log_section_start("Single Run Mode")
         self.poll_and_process_issues()
-        log_agent_action("Single run completed", "COMPLETE")
+        log_info("Single run completed", "COMPLETE")
 
     def run_daemon(self) -> None:
         """Run the agent as a daemon, continuously polling for issues."""
@@ -187,9 +182,9 @@ class GitHubAIAgentApp:
                 time.sleep(self.settings.poll_interval)
 
         except KeyboardInterrupt:
-            log_agent_action("Daemon stopped by user", "SHUTDOWN")
+            log_info("Daemon stopped by user", "SHUTDOWN")
         except Exception as e:
-            log_agent_action(f"Daemon error: {e}", "ERROR")
+            log_info(f"Daemon error: {e}", "ERROR")
             logger.error(f"Daemon error: {e}", exc_info=True)
             raise
 

@@ -98,8 +98,8 @@ def log_agent_action(message: str, action_type: str = "ACTION"):
         "SHUTDOWN": "🛑",
     }
 
-    icon = icon_map.get(action_type, "🔹")
-
+    icon = icon_map.get(action_type, "🤖")
+    icon = "🤖"
     # Format based on action importance
     if action_type in ["SUCCESS", "COMPLETE"]:
         color = Colors.SUCCESS_BOLD
@@ -151,42 +151,32 @@ def log_llm_interaction(message: str, interaction_type: str = "RESPONSE"):
         color = Colors.LLM
         label = "AI"
 
-    # Truncate long messages for readability
-    display_message = message
-    if len(message) > 150:
-        display_message = message[:147] + "..."
-
     print(
-        f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {color}{display_message}{Colors.RESET}"
+        f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {interaction_type} {color}{message}{Colors.RESET}"
     )
 
 
-def log_tool_usage(tool_name: str, input_data: str, output_data: str):
+def log_tool_usage(tool_name: str, message: str, type: str = "INFO"):
     """Log tool usage with clean, formatted output."""
     timestamp = get_timestamp()
     icon = "🔧"
 
+    # Show truncated message for readability
+    if message:
+        truncated_message = message[:100] + "..." if len(message) > 100 else message
+
+    color = Colors.TOOL
+    icon = "🔧"
+
+    if "success" in type.lower() and "true":
+        color = Colors.SUCCESS
+        icon = "✅"
+    elif "error" in type.lower() or "failed" in type.lower():
+        color = Colors.ERROR
+        icon = "❌"
     print(
-        f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {Colors.TOOL_BOLD}TOOL {tool_name}{Colors.RESET}"
+        f"{Colors.DIM}[{timestamp}]{Colors.RESET} {icon} {Colors.TOOL_BOLD}TOOL {tool_name} {color}{truncated_message}{Colors.RESET}"
     )
-
-    # Show truncated input/output for readability
-    if input_data:
-        truncated_input = (
-            input_data[:100] + "..." if len(input_data) > 100 else input_data
-        )
-        print(f"   {Colors.TOOL}└─ Input: {truncated_input}{Colors.RESET}")
-
-    if output_data:
-        truncated_output = (
-            output_data[:100] + "..." if len(output_data) > 100 else output_data
-        )
-        if "success" in output_data.lower() and "true" in output_data.lower():
-            print(f"   {Colors.SUCCESS}└─ ✅ {truncated_output}{Colors.RESET}")
-        elif "error" in output_data.lower() or "failed" in output_data.lower():
-            print(f"   {Colors.ERROR}└─ ❌ {truncated_output}{Colors.RESET}")
-        else:
-            print(f"   {Colors.TOOL}└─ Output: {truncated_output}{Colors.RESET}")
 
 
 def log_error(message: str, error_type: str = "ERROR"):
