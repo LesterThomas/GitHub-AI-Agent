@@ -196,8 +196,8 @@ The agent operates across two repositories:
 1. **Issue Detection**: Continuously polls the source repository for issues labeled "AI Agent"
 2. **Branch Creation**: Immediately creates a feature branch in the SAAA repository
 3. **Content Analysis**: The LanGraph ReAct agent analyzes the issue using the system prompt
-4. **File Specification**: Agent uses the `create_files_from_request` tool to specify files
-5. **File Creation**: Commits the specified files to the pre-created feature branch
+4. **File Creation**: Agent uses the `create_files_from_request` tool to create files directly in GitHub
+5. **Commit & Branch**: Files are committed directly to the pre-created feature branch
 6. **Pull Request**: Opens a PR in SAAA repository linking back to the original issue
 7. **Issue Update**: Comments on the original issue with the PR link
 
@@ -265,7 +265,7 @@ The agent has access to one specialized tool:
 
 #### `create_files_from_request`
 
-**Purpose**: Create files from a JSON array of file objects
+**Purpose**: Create files directly in GitHub repository from a JSON array of file objects
 
 **Input Format**:
 ```json
@@ -281,23 +281,17 @@ The agent has access to one specialized tool:
 ]
 ```
 
-**Output**: JSON object with prepared files ready for GitHub creation
+**Output**: JSON status report of the file creation operation
 ```json
 {
   "success": true,
-  "files": [
-    {
-      "filename": "test.md",
-      "content": "# Test File\n\nThis is a test file content.",
-      "path": "test.md",
-      "message": "Create test.md as requested"
-    }
-  ],
-  "count": 1
+  "files_created": ["test.md", "readme.txt"],
+  "files_count": 2,
+  "errors": null
 }
 ```
 
-**Description**: "Create files from a JSON array of file objects. Each object must have 'filename' and 'file_content' properties. Returns a JSON object with the prepared files ready for GitHub creation."
+**Description**: "Create files directly in the GitHub repository from a JSON array of file objects. Each object must have 'filename' and 'file_content' properties. Files are created immediately on the current branch with appropriate commit messages."
 
 ### Complete Workflow
 
@@ -329,19 +323,22 @@ The agent follows this detailed workflow from GitHub issue polling to PR creatio
          |                       |                       |
          v                       v                       v
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│ 7. PARSE RESULT │ -> │ 8. FILE CREATION │ -> │ 9. PULL REQUEST │
-│                 │    │                  │    │                 │
-│ • Extract files │    │ • Create files   │    │ • Create PR     │
-│   from tool     │    │   in SAAA repo   │    │   in SAAA repo  │
-│   output        │    │ • Commit to      │    │ • Link to issue │
-│ • Prepare for   │    │   existing       │    │ • Add metadata  │
-│   GitHub API    │    │   branch         │    │                 │
+│ 6. TOOL         │ -> │ 7. STATUS CHECK  │ -> │ 8. PULL REQUEST │
+│    EXECUTION    │    │                  │    │                 │
+│                 │    │ • Check tool     │    │ • Create PR     │
+│ • Execute       │    │   results        │    │   in SAAA repo  │
+│   create_files_ │    │ • Verify files   │    │ • Link to issue │
+│   from_request  │    │   created        │    │ • Add metadata  │
+│ • Create files  │    │ • Fallback if    │    │                 │
+│   directly in   │    │   needed         │    │                 │
+│   GitHub        │    │                  │    │                 │
+│ • Return status │    │                  │    │                 │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
          |                       |                       |
          v                       v                       v
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│ 10. ISSUE       │ -> │ 11. LOGGING &    │ -> │ 12. COMPLETION  │
-│     COMMENT     │    │     TRACKING     │    │                 │
+│ 9. ISSUE        │ -> │ 10. LOGGING &    │ -> │ 11. COMPLETION  │
+│    COMMENT      │    │     TRACKING     │    │                 │
 │                 │    │                  │    │ • Mark issue    │
 │ • Add comment   │    │ • Color-coded    │    │   as processed  │
 │   with PR link  │    │   console logs   │    │ • Return        │
@@ -363,17 +360,17 @@ The agent follows this detailed workflow from GitHub issue polling to PR creatio
 - **LLM Model**: GPT-4 (configurable via `OPENAI_MODEL`)
 - **ReAct Pattern**: Uses LanGraph's built-in ReAct agent
 - **Reasoning**: Analyzes issue requirements and plans file creation
-- **Single Tool**: `create_files_from_request` for focused file creation
-- **JSON Validation**: Ensures proper format for file specifications
+- **Single Tool**: `create_files_from_request` for direct file creation in GitHub
+- **Direct Creation**: Files are created immediately in GitHub, no intermediate processing
 
-#### 7-9. File Operations & Pull Request Creation
+#### 7-8. Status Check & Pull Request Creation
 - **Target Repository**: SAAA repository (separate from issue source)
 - **Branch Strategy**: Uses pre-created feature branch `ai-agent/issue-{number}`
-- **File Creation**: Direct API calls to GitHub for file commits
+- **File Creation**: Tool creates files directly via GitHub API with proper commit messages
 - **PR Creation**: Automated pull request with detailed metadata
 - **Error Handling**: Comprehensive error handling with fallbacks
 
-#### 10-12. Issue Management & Completion
+#### 9-11. Issue Management & Completion
 - **Issue Linking**: Comments on original issue with PR link
 - **Status Tracking**: Maintains processed issue list
 - **Logging**: Comprehensive state logging for debugging and monitoring

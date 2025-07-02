@@ -408,7 +408,7 @@ class GitHubIssueAgent:
         """Create tools for the agent."""
 
         def create_files_from_request(files_json: str) -> str:
-            """Create the requested files with the specified content.
+            """Create the requested files directly in GitHub repository.
 
             Args:
                 files_json: JSON string containing array of file objects.
@@ -416,12 +416,12 @@ class GitHubIssueAgent:
                            Example: '[{"filename": "test.md", "file_content": "# Test\\nThis is a test file"}]'
 
             Returns:
-                JSON string containing array of created file objects ready for GitHub.
+                JSON string with creation results.
             """
             import json
 
             log_tool_usage(
-                "create_files_from_request", files_json[:200], "Processing files..."
+                "create_files_from_request", files_json[:200], "Creating files directly in GitHub..."
             )
 
             try:
@@ -433,66 +433,94 @@ class GitHubIssueAgent:
                     log_tool_usage(
                         "create_files_from_request", files_json[:100], error_msg
                     )
-                    return json.dumps({"error": error_msg, "files": []})
+                    return json.dumps({"success": False, "error": error_msg, "files_created": []})
 
-                created_files = []
+                # Get the current branch name from the instance
+                # This will be set when the agent is processing an issue
+                current_branch = getattr(self, '_current_branch', None)
+                if not current_branch:
+                    error_msg = "No branch available for file creation"
+                    log_error(error_msg)
+                    return json.dumps({"success": False, "error": error_msg, "files_created": []})
+
+                files_created = []
+                errors = []
+
                 for file_obj in files_array:
                     if not isinstance(file_obj, dict):
-                        log_error(f"Invalid file object: {file_obj}")
+                        error_msg = f"Invalid file object: {file_obj}"
+                        log_error(error_msg)
+                        errors.append(error_msg)
                         continue
 
                     filename = file_obj.get("filename")
                     file_content = file_obj.get("file_content")
 
                     if not filename:
-                        log_error("File object missing 'filename' property")
+                        error_msg = "File object missing 'filename' property"
+                        log_error(error_msg)
+                        errors.append(error_msg)
                         continue
 
                     if file_content is None:
-                        file_content = (
-                            "# Default Content\n\nThis file was created automatically."
-                        )
+                        file_content = "# Default Content\n\nThis file was created automatically."
 
                     log_info(
-                        f"Prepared file: {filename} ({len(str(file_content))} characters)"
+                        f"Creating file directly in GitHub: {filename} ({len(str(file_content))} characters)"
                     )
 
-                    created_files.append(
-                        {
-                            "filename": filename,
-                            "content": file_content,
-                            "path": filename,  # GitHub API expects 'path'
-                            "message": f"Create {filename} as requested",
-                        }
+                    # Create the file directly in GitHub
+                    log_agent_action(
+                        f"Creating file {filename} in SAAA repository on branch {current_branch}",
+                        "FILE_COMMIT",
                     )
+                    
+                    # Get the current issue number for the commit message
+                    current_issue_number = getattr(self, '_current_issue_number', 'unknown')
+                    commit_message = f"Create {filename} as requested in issue #{current_issue_number}"
+                    
+                    if self.github_client.create_or_update_file(
+                        path=filename,
+                        content=file_content,
+                        message=commit_message,
+                        branch=current_branch,
+                    ):
+                        files_created.append(filename)
+                        log_info(f"Successfully created file: {filename} in SAAA repository")
+                    else:
+                        error_msg = f"Failed to create file: {filename} in SAAA repository"
+                        log_error(error_msg)
+                        errors.append(error_msg)
 
+                # Prepare result
                 result = {
-                    "success": True,
-                    "files": created_files,
-                    "count": len(created_files),
+                    "success": len(files_created) > 0,
+                    "files_created": files_created,
+                    "files_count": len(files_created),
+                    "errors": errors if errors else None
                 }
 
                 result_json = json.dumps(result, indent=2)
                 log_tool_usage(
                     "create_files_from_request",
                     files_json[:100],
-                    f"Created {len(created_files)} files",
+                    f"Created {len(files_created)} files directly in GitHub",
                 )
                 return result_json
 
             except json.JSONDecodeError as e:
                 error_msg = f"Invalid JSON format: {e}"
                 log_tool_usage("create_files_from_request", files_json[:100], error_msg)
-                return json.dumps({"error": error_msg, "files": []})
+                return json.dumps({"success": False, "error": error_msg, "files_created": []})
             except Exception as e:
-                error_msg = f"Error processing files: {e}"
+                error_msg = f"Error creating files: {e}"
                 log_tool_usage("create_files_from_request", files_json[:100], error_msg)
-                return json.dumps({"error": error_msg, "files": []})
+                return json.dumps({"success": False, "error": error_msg, "files_created": []})
 
         return [
             Tool(
                 name="create_files_from_request",
-                description="""Create files from a JSON array of file objects. Each object must have 'filename' and 'file_content' properties.
+                description="""Create files directly in the GitHub repository. Each object must have 'filename' and 'file_content' properties.
 
 Example input:
 [
@@ -506,7 +534,7 @@ Example input:
   }
 ]
 
-Returns a JSON object with the prepared files ready for GitHub creation.""",
+This tool creates the files immediately in the GitHub repository and returns a status report.""",
                 func=create_files_from_request,
             ),
         ]
@@ -577,12 +605,16 @@ Use the create_files_from_request tool with proper JSON formatting."""
                 "Messages created, preparing to invoke agent", "MESSAGE_READY"
             )
 
+            # Set the current branch and issue number for the tool to use
+            self._current_branch = branch_name
+            self._current_issue_number = issue.number
+
             # Run the agent
             initial_state = AgentState(
                 messages=[system_message, human_message],
                 issue_data=issue_data,
                 generated_content=None,
-                branch_name=None,
+                branch_name=branch_name,
                 pr_created=False,
             )
 
@@ -640,14 +672,11 @@ Use the create_files_from_request tool with proper JSON formatting."""
             )
 
             log_info(f"Generated content length: {len(generated_content)} characters")
-            log_agent_action("Extracting files from agent response", "PARSE")
+            log_agent_action("Checking tool execution results", "PARSE")
 
-            # Extract file information from the agent's tool usage
-            import json
-            import re
-
-            files_to_create = []
-
+            # Check if files were created by the tool (tool creates files directly now)
+            files_created = []
+            
             # Look for ToolMessage instances that contain the tool results
             log_info("Searching for tool results in message history")
             for msg in final_state.get("messages", []):
@@ -655,137 +684,33 @@ Use the create_files_from_request tool with proper JSON formatting."""
                 if hasattr(msg, "name") and msg.name == "create_files_from_request":
                     try:
                         tool_result = json.loads(msg.content)
-                        if tool_result.get("success") and tool_result.get("files"):
-                            files_to_create.extend(tool_result["files"])
+                        if tool_result.get("success") and tool_result.get("files_created"):
+                            files_created.extend(tool_result["files_created"])
                             log_info(
-                                f"Extracted {len(tool_result['files'])} files from ToolMessage"
+                                f"Tool created {len(tool_result['files_created'])} files directly in GitHub"
                             )
                             break  # Found the tool result, no need to continue
+                        elif not tool_result.get("success"):
+                            log_error(f"Tool execution failed: {tool_result.get('error', 'Unknown error')}")
                     except json.JSONDecodeError as e:
                         log_error(f"Failed to parse ToolMessage JSON: {e}")
                         continue
 
-            # Fallback: Look for JSON output in the generated content
-            if not files_to_create:
-                log_info("No files found in ToolMessages, checking generated content")
-                json_pattern = r'\{[^{}]*"files"[^{}]*\[[^\]]*\][^{}]*\}'
-                json_matches = re.findall(json_pattern, generated_content, re.DOTALL)
+            log_info(f"Total files created by tool: {len(files_created)}")
 
-                for json_match in json_matches:
-                    try:
-                        tool_output = json.loads(json_match)
-                        if tool_output.get("success") and tool_output.get("files"):
-                            files_to_create.extend(tool_output["files"])
-                            log_info(
-                                f"Extracted {len(tool_output['files'])} files from generated content"
-                            )
-                    except json.JSONDecodeError:
-                        continue
+            # Clean up temporary instance variables
+            if hasattr(self, '_current_branch'):
+                delattr(self, '_current_branch')
+            if hasattr(self, '_current_issue_number'):
+                delattr(self, '_current_issue_number')
 
-            # Another fallback: Check for tool_calls and their results
-            if not files_to_create:
-                log_info("No files found in content, checking tool calls in state")
-                for i, msg in enumerate(final_state.get("messages", [])):
-                    if hasattr(msg, "tool_calls") and msg.tool_calls:
-                        for tool_call in msg.tool_calls:
-                            if tool_call.get("name") == "create_files_from_request":
-                                # Look for the corresponding ToolMessage result
-                                for j in range(i + 1, len(final_state["messages"])):
-                                    next_msg = final_state["messages"][j]
-                                    if (hasattr(next_msg, "tool_call_id") and 
-                                        next_msg.tool_call_id == tool_call.get("id")):
-                                        try:
-                                            tool_result = json.loads(next_msg.content)
-                                            if tool_result.get("files"):
-                                                files_to_create.extend(tool_result["files"])
-                                                log_info(
-                                                    f"Extracted {len(tool_result['files'])} files from tool call result"
-                                                )
-                                        except (json.JSONDecodeError, AttributeError):
-                                            continue
-
-            log_info(f"Total files to create: {len(files_to_create)}")
-
-            # Use pre-created branch or create a new one
-            if branch_name is None:
-                branch_name = f"ai-agent/issue-{issue.number}"
+            # Create fallback file if no files were created by the tool
+            if not files_created:
                 log_agent_action(
-                    f"Creating feature branch '{branch_name}' in SAAA repository",
-                    "BRANCH_CREATE",
-                )
-                log_info(
-                    f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
-                )
-                
-                if not self.github_client.create_branch(branch_name):
-                    log_error(
-                        f"Failed to create feature branch '{branch_name}' in SAAA repository"
-                    )
-                    error_msg = "Failed to create branch in SAAA repository"
-                    log_error(error_msg)
-                    return IssueProcessingResult(success=False, error_message=error_msg)
-                
-                log_info(
-                    f"Successfully created feature branch '{branch_name}' in SAAA repository"
-                )
-            else:
-                log_agent_action(
-                    f"Using pre-created branch '{branch_name}' in SAAA repository",
-                    "BRANCH_USE_EXISTING",
-                )
-                log_info(
-                    f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
-                )
-
-            files_created = []
-
-            if files_to_create:
-                log_agent_action(
-                    f"Creating {len(files_to_create)} files from agent output",
-                    "FILE_CREATE",
-                )
-                # Create the files specified by the agent
-                for file_obj in files_to_create:
-                    filename = file_obj.get("filename") or file_obj.get("path")
-                    file_content = file_obj.get("content") or file_obj.get(
-                        "file_content", ""
-                    )
-
-                    if not filename:
-                        log_error(f"File object missing filename: {file_obj}")
-                        continue
-
-                    log_info(
-                        f"Creating file: {filename} ({len(str(file_content))} characters)"
-                    )
-
-                    log_agent_action(
-                        f"Creating file {filename} in SAAA repository on branch {branch_name}",
-                        "FILE_COMMIT",
-                    )
-                    if self.github_client.create_or_update_file(
-                        path=filename,
-                        content=file_content,
-                        message=file_obj.get(
-                            "message",
-                            f"Create {filename} as requested in issue #{issue.number}",
-                        ),
-                        branch=branch_name,
-                    ):
-                        files_created.append(filename)
-                        log_info(
-                            f"Successfully created file: {filename} in SAAA repository"
-                        )
-                    else:
-                        log_error(
-                            f"Failed to create file: {filename} in SAAA repository"
-                        )
-            else:
-                log_agent_action(
-                    "No files specified by agent, creating metadata file",
+                    "No files created by tool, creating fallback metadata file",
                     "FALLBACK",
                 )
-                # Fallback: create a metadata file if no specific files were identified
+                # Fallback: create a metadata file if the tool didn't create any files
                 file_path = f"generated/issue-{issue.number}.md"
                 file_content = f"""# Response to Issue #{issue.number}: {issue.title}
 
@@ -962,7 +887,7 @@ Use the create_files_from_request tool with proper JSON formatting."""
                 messages=[system_message, human_message],
                 issue_data=issue_data,
                 generated_content=None,
-                branch_name=None,
+                branch_name=branch_name,
                 pr_created=False,
             )
 
@@ -970,6 +895,10 @@ Use the create_files_from_request tool with proper JSON formatting."""
                 "configurable": {"thread_id": f"issue-{issue.number}"},
                 "recursion_limit": self.recursion_limit,
             }
+
+            # Set the current branch and issue number for the tool to use
+            self._current_branch = branch_name
+            self._current_issue_number = issue.number
 
             log_agent_action(
                 "Starting agent execution with state logging", "AGENT_START"
@@ -1017,130 +946,127 @@ Use the create_files_from_request tool with proper JSON formatting."""
             )
 
             log_info(f"Generated content length: {len(generated_content)} characters")
-            log_agent_action("Parsing issue for file requirements", "PARSE")
+            log_agent_action("Checking tool execution results", "PARSE")
 
-            # Parse the issue to extract file requirements
-            import re
-            import ast
-
-            # Try to extract file requirements from the issue
-            issue_text = f"{issue.title}\n{issue.body or ''}"
-
-            # Look for file creation patterns
-            file_patterns = [
-                r"[Cc]reate\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)",  # "Create TEST.md"
-                r"[Aa]dd\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)",  # "Add TEST.md"
-                r"[Mm]ake\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)",  # "Make TEST.md"
-                r"([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)\s+(?:file|document)",  # "TEST.md file"
-            ]
-
-            requested_files = []
-            for pattern in file_patterns:
-                matches = re.findall(pattern, issue_text, re.IGNORECASE)
-                requested_files.extend(matches)
-
-            # Remove duplicates
-            requested_files = list(dict.fromkeys(requested_files))
-
-            log_info(f"Extracted requested files: {requested_files}")
-
-            # Use pre-created branch or create a new one
-            if branch_name is None:
-                branch_name = f"ai-agent/issue-{issue.number}"
-                log_agent_action(
-                    f"Creating feature branch '{branch_name}' in SAAA repository",
-                    "BRANCH_CREATE",
-                )
-                log_info(
-                    f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
-                )
-                
-                if not self.github_client.create_branch(branch_name):
-                    log_error(
-                        f"Failed to create feature branch '{branch_name}' in SAAA repository"
-                    )
-                    error_msg = "Failed to create branch in SAAA repository"
-                    log_error(error_msg)
-                    return IssueProcessingResult(success=False, error_message=error_msg)
-                
-                log_info(
-                    f"Successfully created feature branch '{branch_name}' in SAAA repository"
-                )
-            else:
-                log_agent_action(
-                    f"Using pre-created branch '{branch_name}' in SAAA repository",
-                    "BRANCH_USE_EXISTING",
-                )
-                log_info(
-                    f"Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"
-                )
-
+            # Check if files were created by the tool (tool creates files directly now)
             files_created = []
+            
+            # Look for ToolMessage instances that contain the tool results
+            log_info("Searching for tool results in message history")
+            for msg in final_state.get("messages", []):
+                # Check for ToolMessage instances (the actual tool results)
+                if hasattr(msg, "name") and msg.name == "create_files_from_request":
+                    try:
+                        tool_result = json.loads(msg.content)
+                        if tool_result.get("success") and tool_result.get("files_created"):
+                            files_created.extend(tool_result["files_created"])
+                            log_info(
+                                f"Tool created {len(tool_result['files_created'])} files directly in GitHub"
+                            )
+                            break  # Found the tool result, no need to continue
+                        elif not tool_result.get("success"):
+                            log_error(f"Tool execution failed: {tool_result.get('error', 'Unknown error')}")
+                    except json.JSONDecodeError as e:
+                        log_error(f"Failed to parse ToolMessage JSON: {e}")
+                        continue
 
-            if requested_files:
-                log_agent_action(
-                    f"Creating {len(requested_files)} requested files",
-                    "FILE_CREATE",
-                )
-                # Create the specific files requested in the issue
-                for filename in requested_files:
-                    log_info(f"Processing file: {filename}")
-                    # Generate content for the specific file based on the issue requirements
-                    if "describing" in issue_text.lower():
-                        desc_match = re.search(
-                            r"describing\s+(.+?)(?:\.|$)", issue_text, re.IGNORECASE
-                        )
-                        topic = (
-                            desc_match.group(1).strip()
-                            if desc_match
-                            else "the requested topic"
-                        )
-                    else:
-                        topic = "the requested content"
+            log_info(f"Total files created by tool: {len(files_created)}")
 
-                    log_info(f"Generating content for topic: {topic}")
+            # Clean up temporary instance variables
+            if hasattr(self, '_current_branch'):
+                delattr(self, '_current_branch')
+            if hasattr(self, '_current_issue_number'):
+                delattr(self, '_current_issue_number')
 
-                    # Generate appropriate content based on file type
-                    if filename.endswith(".md"):
-                        file_content = f"""# {topic.title()}
+            # Create fallback file if no files were created by the tool
+            if not files_created:
+                # Parse the issue to extract file requirements for fallback generation
+                import re
+
+                # Try to extract file requirements from the issue
+                issue_text = f"{issue.title}\n{issue.body or ''}"
+
+                # Look for file creation patterns
+                file_patterns = [
+                    r"[Cc]reate\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)",  # "Create TEST.md"
+                    r"[Aa]dd\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)",  # "Add TEST.md"
+                    r"[Mm]ake\s+(?:a\s+)?([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)",  # "Make TEST.md"
+                    r"([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)\s+(?:file|document)",  # "TEST.md file"
+                ]
+
+                requested_files = []
+                for pattern in file_patterns:
+                    matches = re.findall(pattern, issue_text, re.IGNORECASE)
+                    requested_files.extend(matches)
+
+                # Remove duplicates
+                requested_files = list(dict.fromkeys(requested_files))
+                log_info(f"Extracted requested files for fallback: {requested_files}")
+
+                if requested_files:
+                    log_agent_action(
+                        f"Creating {len(requested_files)} requested files as fallback",
+                        "FALLBACK_FILE_CREATE",
+                    )
+                    # Create the specific files requested in the issue as fallback
+                    for filename in requested_files:
+                        log_info(f"Processing fallback file: {filename}")
+                        # Generate content for the specific file based on the issue requirements
+                        if "describing" in issue_text.lower():
+                            desc_match = re.search(
+                                r"describing\s+(.+?)(?:\.|$)", issue_text, re.IGNORECASE
+                            )
+                            topic = (
+                                desc_match.group(1).strip()
+                                if desc_match
+                                else "the requested topic"
+                            )
+                        else:
+                            topic = "the requested content"
+
+                        log_info(f"Generating content for topic: {topic}")
+
+                        # Generate appropriate content based on file type
+                        if filename.endswith(".md"):
+                            file_content = f"""# {topic.title()}
 
 {self._generate_content_for_topic(topic)}
 
 ---
 *This file was automatically generated by AI Agent in response to issue #{issue.number}*
 """
-                    else:
-                        file_content = f"""{self._generate_content_for_topic(topic)}
+                        else:
+                            file_content = f"""{self._generate_content_for_topic(topic)}
 
 This file was automatically generated by AI Agent in response to issue #{issue.number}
 """
 
+                        log_agent_action(
+                            f"Creating fallback file {filename} in SAAA repository on branch {branch_name}",
+                            "FILE_COMMIT",
+                        )
+                        if self.github_client.create_or_update_file(
+                            path=filename,
+                            content=file_content,
+                            message=f"Create {filename} as requested in issue #{issue.number}",
+                            branch=branch_name,
+                        ):
+                            files_created.append(filename)
+                            log_info(
+                                f"Successfully created fallback file: {filename} in SAAA repository"
+                            )
+                        else:
+                            log_error(
+                                f"Failed to create fallback file: {filename} in SAAA repository"
+                            )
+                else:
                     log_agent_action(
-                        f"Creating file {filename} in SAAA repository on branch {branch_name}",
-                        "FILE_COMMIT",
+                        "No specific files requested, creating metadata file",
+                        "FALLBACK",
                     )
-                    if self.github_client.create_or_update_file(
-                        path=filename,
-                        content=file_content,
-                        message=f"Create {filename} as requested in issue #{issue.number}",
-                        branch=branch_name,
-                    ):
-                        files_created.append(filename)
-                        log_info(
-                            f"Successfully created file: {filename} in SAAA repository"
-                        )
-                    else:
-                        log_error(
-                            f"Failed to create file: {filename} in SAAA repository"
-                        )
-            else:
-                log_agent_action(
-                    "No specific files requested, creating metadata file",
-                    "FALLBACK",
-                )
-                # Fallback: create a metadata file if no specific files were identified
-                file_path = f"generated/issue-{issue.number}.md"
-                file_content = f"""# Response to Issue #{issue.number}: {issue.title}
+                    # Fallback: create a metadata file if no specific files were identified
+                    file_path = f"generated/issue-{issue.number}.md"
+                    file_content = f"""# Response to Issue #{issue.number}: {issue.title}
 
 ## Original Issue
 {issue.body or 'No description provided'}
@@ -1153,24 +1079,24 @@ This file was automatically generated by AI Agent in response to issue #{issue.n
 - Created by: AI Agent
 - Branch: {branch_name}
 """
-                log_agent_action(
-                    f"Creating fallback file {file_path} in SAAA repository",
-                    "FILE_COMMIT",
-                )
-                if self.github_client.create_or_update_file(
-                    path=file_path,
-                    content=file_content,
-                    message=f"AI Agent response to issue #{issue.number}",
-                    branch=branch_name,
-                ):
-                    files_created.append(file_path)
-                    log_info(
-                        f"Successfully created fallback file: {file_path} in SAAA repository"
+                    log_agent_action(
+                        f"Creating fallback metadata file {file_path} in SAAA repository",
+                        "FILE_COMMIT",
                     )
-                else:
-                    log_error(
-                        f"Failed to create fallback file: {file_path} in SAAA repository"
-                    )
+                    if self.github_client.create_or_update_file(
+                        path=file_path,
+                        content=file_content,
+                        message=f"AI Agent response to issue #{issue.number}",
+                        branch=branch_name,
+                    ):
+                        files_created.append(file_path)
+                        log_info(
+                            f"Successfully created fallback metadata file: {file_path} in SAAA repository"
+                        )
+                    else:
+                        log_error(
+                            f"Failed to create fallback metadata file: {file_path} in SAAA repository"
+                        )
 
             if files_created:
                     log_agent_action(
