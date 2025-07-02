@@ -62,12 +62,35 @@ class GitHubAIAgentApp:
         log_info(f"Max iterations: {self.settings.max_iterations}")
         log_info(f"Recursion limit: {self.settings.recursion_limit}")
 
-        self.github_client = GitHubClient(
-            token=self.settings.github_token,
-            target_owner=self.settings.target_owner,
-            target_repo=self.settings.target_repo,
-        )
-        log_agent_action("GitHub client initialized", "CLIENT_INIT")
+        # Initialize GitHub client - prioritize GitHub App authentication
+        if (
+            self.settings.github_app_id
+            and self.settings.github_client_id
+            and self.settings.github_client_secret
+        ):
+            self.github_client = GitHubClient(
+                target_owner=self.settings.target_owner,
+                target_repo=self.settings.target_repo,
+                app_id=self.settings.github_app_id,
+                client_id=self.settings.github_client_id,
+                client_secret=self.settings.github_client_secret,
+            )
+            log_agent_action(
+                "GitHub client initialized with App authentication", "CLIENT_INIT"
+            )
+        elif self.settings.github_token:
+            self.github_client = GitHubClient(
+                target_owner=self.settings.target_owner,
+                target_repo=self.settings.target_repo,
+                token=self.settings.github_token,
+            )
+            log_agent_action(
+                "GitHub client initialized with token authentication", "CLIENT_INIT"
+            )
+        else:
+            raise ValueError(
+                "Either GitHub App credentials or GitHub token must be provided"
+            )
 
         self.agent = GitHubIssueAgent(
             github_client=self.github_client,
