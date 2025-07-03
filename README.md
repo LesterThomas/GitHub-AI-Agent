@@ -527,3 +527,138 @@ For production deployment, monitor:
 ## Target Repository
 
 This agent is designed to monitor the [LesterThomas/SAAA](https://github.com/LesterThomas/SAAA) repository for issues labeled "AI Agent" and automatically generate helpful responses.
+
+
+## Example Execution output
+
+```
+uv run python main.py
+════════════════════════════════════════════════════════════════════════════════
+🤖 GITHUB AI AGENT - Automated Issue Processing
+════════════════════════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════
+🎯 GITHUB AI AGENT INITIALIZATION
+────────────────────────────────────────────────────────────
+[23:04:18] ℹ️ Target: LesterThomas/SAAA
+[23:04:18] ℹ️ Label filter: 'AI Agent'
+[23:04:18] ℹ️ AI Model: gpt-4o-mini
+[23:04:18] ℹ️ Max iterations: 20
+[23:04:18] 🐙 Using GitHub App authentication (preferred)
+[23:04:18] 🐙 Attempting GitHub App authentication for App ID: 1496943
+[23:04:18] 🐙 Found private key file: ea-agent.2025-07-02.private-key.pem
+[23:04:18] 🐙 Using private key authentication with file: ea-agent.2025-07-02.private-key.pem
+[23:04:18] 🐙 Successfully generated JWT token
+[23:04:18] 🐙 Found installation ID 73987373 for repository LesterThomas/SAAA
+[23:04:18] 🐙 Successfully generated installation access token (expires: 2025-07-03T23:04:18Z)
+[23:04:18] 🐙 Successfully authenticated GitHub App as installation
+[23:04:18] 🐙 Authenticated via GitHub App
+[23:04:19] 🤖 Initializing GitHub Issue Agent
+[23:04:19] 🤖 Model: gpt-4o-mini, Max iterations: 20
+[23:04:19] 🤖 Recursion limit: 50
+[23:04:19] 🤖 Target SAAA repository: LesterThomas/SAAA
+[23:04:19] 🤖 Created 1 tools: ['create_files_from_request']
+[23:04:19] 🤖 ReAct agent created successfully
+────────────────────────────────────────────────────────────────────────────────
+════════════════════════════════════════════════════════════
+🎯 SINGLE RUN MODE
+────────────────────────────────────────────────────────────
+════════════════════════════════════════════════════════════
+🎯 SCANNING FOR ISSUES
+────────────────────────────────────────────────────────────
+[23:04:19] ℹ️ Looking for issues labeled 'AI Agent'
+[23:04:19] ℹ️ Discovered 1 unprocessed issues
+────────────────────────────────────────────────────────────────────────────────
+════════════════════════════════════════════════════════════
+🎯 PROCESSING ISSUE #91 TITLE: CREATE TEST.MD
+────────────────────────────────────────────────────────────
+[23:04:19] 🐙 Creating branch 'ai-agent/issue-91'
+[23:04:19] 🐙 Creating branch 'ai-agent/issue-91' in LesterThomas/SAAA from 'main'
+[23:04:21] 🐙 Successfully created branch 'ai-agent/issue-91' in LesterThomas/SAAA
+[23:04:21] 🐙 Branch 'ai-agent/issue-91' created successfully
+[23:04:21] 🤖 Starting to process issue #91
+[23:04:21] 🤖 Fetching issue #91 from GitHub
+[23:04:21] 🤖 Successfully fetched issue #91: Create TEST.md
+[23:04:21] 🤖 Issue data prepared - Title: Create TEST.md, User: LesterThomas, Labels: ['AI Agent']
+[23:04:21] 🤖 Creating system and human messages
+[23:04:21] 🤖 Messages created, preparing to invoke agent
+[23:04:21] 🤖 Invoking ReAct agent with thread_id: issue-91, recursion_limit: 50
+[23:04:21] 🧠 values (HumanMessage)
+    Process this GitHub issue:
+
+    Issue #91: Create TEST.md
+
+    Description: Create a TEST.md markdown file and in the content of the file make up a poem about clouds.
+
+    Analyze the issue and use create_files_from_request with a JSON array to create the requested files.
+
+    Example format:
+    [
+      {
+        "filename": "example.md",
+        "file_content": "# Example\n\nThis is example content."
+      }
+    ]
+
+    Use the create_files_from_request tool with proper JSON formatting.
+──────────────────────────────────────────────────
+[23:04:25] 🧠 values (AIMessage)
+    Tool Calls:
+      1. **create_files_from_request**
+         Args: {
+      "__arg1": "[{\"filename\": \"TEST.md\", \"file_content\": \"# Clouds\n\nIn the sky so high and bright,  \nFluffy clouds take their flight.  \nWhispers of white, drifting slow,  \nPainting the blue with a gentle glow.  \n\nSome are like cotton, soft and sweet,  \nOthers like shadows, a cool retreat.  \nThey dance and twirl, a graceful ballet,  \nChanging their shapes throughout the day.  \n\nWhen the sun sets, they catch the light,  \nA canvas of colors, a breathtaking sight.  \nOh, how they wander, free and proud,  \nA beautiful mystery, the ever-changing cloud.\"}]}"
+    }
+──────────────────────────────────────────────────
+[23:04:25] 🔧 TOOL create_files_from_request [{"filename": "TEST.md", "file_content": "# Clouds
+
+In the sky so high and bright,
+Fluffy clouds t...
+[23:04:25] ❌ TOOL create_files_from_request Invalid JSON format: Invalid control character at: line 1 column 51 (char 50)
+[23:04:25] 🧠 values (ToolMessage)
+    {"success": false, "error": "Invalid JSON format: Invalid control character at: line 1 column 51 (char 50)", "files_created": []}
+──────────────────────────────────────────────────
+[23:04:28] 🧠 values (AIMessage)
+    Tool Calls:
+      1. **create_files_from_request**
+         Args: {
+      "__arg1": "[{\"filename\": \"TEST.md\", \"file_content\": \"# Clouds\\n\\nIn the sky so high and bright,  \\nFluffy clouds take their flight.  \\nWhispers of white, drifting slow,  \\nPainting the blue with a gentle glow.  \\n\\nSome are like cotton, soft and sweet,  \\nOthers like shadows, a cool retreat.  \\nThey dance and twirl, a graceful ballet,  \\nChanging their shapes throughout the day.  \\n\\nWhen the sun sets, they catch the light,  \\nA canvas of colors, a breathtaking sight.  \\nOh, how they wander, free and proud,  \\nA beautiful mystery, the ever-changing cloud.\"}]"
+    }
+──────────────────────────────────────────────────
+[23:04:28] 🔧 TOOL create_files_from_request [{"filename": "TEST.md", "file_content": "# Clouds\n\nIn the sky so high and bright,  \nFluffy cloud...
+[23:04:28] 🤖 Creating file TEST.md in SAAA repository on branch ai-agent/issue-91
+[23:04:28] 🐙 Creating/updating file 'TEST.md' in LesterThomas/SAAA on branch 'ai-agent/issue-91'
+[23:04:29] 🐙 Created file 'TEST.md' in LesterThomas/SAAA
+[23:04:29] 🤖 Successfully created file: TEST.md
+[23:04:29] 🔧 TOOL create_files_from_request Created 1 files directly in GitHub
+[23:04:29] 🧠 values (ToolMessage)
+    {
+      "success": true,
+      "files_created": [
+        "TEST.md"
+      ],
+      "files_count": 1,
+      "errors": null
+    }
+──────────────────────────────────────────────────
+[23:04:30] 🧠 values (AIMessage)
+    Created the file **TEST.md** with a poem about clouds.
+──────────────────────────────────────────────────
+[23:04:30] 🤖 Agent execution completed after 6 steps
+[23:04:30] 🤖 Generated content length: 54 characters
+[23:04:30] 🤖 Total files created by tool: 1
+[23:04:30] 🤖 Files created successfully: ['TEST.md']
+[23:04:30] 🤖 Describing file: TEST.md
+[23:04:30] 🤖 File description for TEST.md: Test markdown file with example content
+[23:04:30] 🤖 Creating pull request to SAAA repository: Create TEST.md as requested in issue #91
+[23:04:30] 🐙 Creating pull request in LesterThomas/SAAA: 'Create TEST.md as requested in issue #91'
+[23:04:30] 🐙 PR details - Head: ai-agent/issue-91, Base: main, Draft: False
+[23:04:31] 🐙 Successfully created pull request #92 in LesterThomas/SAAA: Create TEST.md as requested in issue #91
+[23:04:31] 🐙 Pull request URL: https://github.com/LesterThomas/SAAA/pull/92
+[23:04:31] 🤖 Successfully created pull request #92 in SAAA repository
+[23:04:31] 🤖 Pull request URL: https://github.com/LesterThomas/SAAA/pull/92
+[23:04:31] 🤖 Adding comment to issue #91
+[23:04:33] 🐙 Added comment to issue #91
+[23:04:33] 🤖 Issue #91 processed successfully - created PR in SAAA repository
+[23:04:33] 🐙 Issue completed! Created PR #92
+────────────────────────────────────────────────────────────────────────────────
+[23:04:33] ℹ️ Single run completed
+```
