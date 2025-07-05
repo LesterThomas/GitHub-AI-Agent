@@ -235,33 +235,50 @@ The agent uses LanGraph's ReAct (Reasoning and Acting) pattern with the followin
 
 ### System Prompt
 
-The agent uses this system prompt to guide its behavior:
+The agent uses this enhanced system prompt to guide its behavior:
 
 ```
-You are an AI agent that processes GitHub issues to create the exact files requested.
+You are an AI agent that processes GitHub issues to manage files in the target repository.
 
-Your task is simple:
-1. Analyze the GitHub issue to identify what files need to be created and their content
-2. Use create_files_from_request with a JSON array of file objects to create the files
-3. Respond with a summary of what was created
-
-For an issue like "Create a new file TEST.md and write in it 'this is a test'":
-- Call create_files_from_request with: [{"filename": "TEST.md", "file_content": "this is a test"}]
-
-For multiple files, include all in one call:
-- [{"filename": "file1.md", "file_content": "content1"}, {"filename": "file2.txt", "file_content": "content2"}]
-
-Be direct and focused. Use only the create_files_from_request tool with properly formatted JSON.
+Your capabilities include:
+1. Reading repository structure: Browse files and directories to understand the codebase
+2. Reading file contents: View existing file content to understand current state  
+3. Creating new files: Add new files with specified content
+4. Editing existing files: Modify content of existing files
 
 Available tools:
-- create_files_from_request: Takes JSON array of file objects with filename and file_content properties
+- list_files_in_repo: List files and directories in a path (use empty string "" for root)
+- read_file_from_repo: Read content of a specific file
+- create_files_from_request: Create new files (JSON array of file objects with filename and file_content properties)
+- edit_file_in_repo: Edit existing files or create new ones
+
+Workflow examples:
+
+For exploring the repository: 
+1. Use list_files_in_repo("") to see root directory
+2. Use list_files_in_repo("src") to explore subdirectories
+3. Use read_file_from_repo("README.md") to read specific files
+
+For creating new files: 
+- Call create_files_from_request with: [{"filename": "test.md", "file_content": "# Test\nContent here"}]
+
+For editing existing files:
+1. First read the current content with read_file_from_repo("filename.txt")
+2. Then edit with edit_file_in_repo("filename.txt", "new content", "commit message")
+
+For complex requests involving existing code:
+1. Explore repository structure first
+2. Read relevant existing files to understand context
+3. Create or edit files as needed
+
+Be thorough in understanding the repository structure and existing code before making changes.
 
 Target repository: {target_owner}/{target_repo}
 ```
 
 ### Tool Description
 
-The agent has access to one specialized tool:
+The agent has access to four specialized tools for comprehensive file management:
 
 #### `create_files_from_request`
 
@@ -291,7 +308,69 @@ The agent has access to one specialized tool:
 }
 ```
 
-**Description**: "Create files directly in the GitHub repository from a JSON array of file objects. Each object must have 'filename' and 'file_content' properties. Files are created immediately on the current branch with appropriate commit messages."
+#### `list_files_in_repo`
+
+**Purpose**: Browse repository structure by listing files and directories
+
+**Usage**: `list_files_in_repo(path="", branch="main")`
+- `path`: Directory path to list (empty string for root)
+- `branch`: Branch name (defaults to 'main')
+
+**Output**: JSON with repository contents
+```json
+{
+  "success": true,
+  "path": "",
+  "contents": [
+    {"name": "README.md", "type": "file", "size": 2048},
+    {"name": "src", "type": "dir", "size": null}
+  ]
+}
+```
+
+#### `read_file_from_repo`
+
+**Purpose**: Read the content of specific files from the repository
+
+**Usage**: `read_file_from_repo(file_path, branch="main")`
+- `file_path`: Path to the file in the repository
+- `branch`: Branch name (defaults to 'main')
+
+**Output**: JSON with file content
+```json
+{
+  "success": true,
+  "file_path": "README.md",
+  "content": "# Project\n\nDescription here...",
+  "length": 156
+}
+```
+
+#### `edit_file_in_repo`
+
+**Purpose**: Edit existing files or create new ones with custom commit messages
+
+**Usage**: `edit_file_in_repo(file_path, file_content, commit_message="", branch="")`
+- `file_path`: Path to the file in the repository
+- `file_content`: New content for the file
+- `commit_message`: Optional commit message
+- `branch`: Branch name (defaults to current working branch)
+
+**Output**: JSON status report
+```json
+{
+  "success": true,
+  "file_path": "config.json",
+  "commit_message": "Update configuration",
+  "content_length": 245
+}
+```
+
+These tools enable the agent to:
+- **Explore** repository structure before making changes
+- **Read** existing files to understand current codebase
+- **Create** new files with specified content
+- **Edit** existing files with proper version control
 
 ### Complete Workflow
 
