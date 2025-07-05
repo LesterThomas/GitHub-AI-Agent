@@ -376,7 +376,171 @@ Example input:
 This tool creates the files immediately in the GitHub repository and returns a status report.""",
                 func=create_files_from_request,
             ),
+            Tool(
+                name="list_files_in_repo",
+                description="""List files and directories in the GitHub repository.
+
+Args:
+    path: Directory path to list (empty string for root directory)
+    branch: Branch name (defaults to 'main')
+
+Example: To list root directory: ""
+Example: To list a subdirectory: "src/components"
+
+Returns JSON with list of files and directories, including names, paths, types, and sizes.""",
+                func=self._list_files_in_repo,
+            ),
+            Tool(
+                name="read_file_from_repo",
+                description="""Read the content of a specific file from the GitHub repository.
+
+Args:
+    file_path: Path to the file in the repository
+    branch: Branch name (defaults to 'main')
+
+Example: "README.md" or "src/main.py"
+
+Returns the file content as a string.""",
+                func=self._read_file_from_repo,
+            ),
+            Tool(
+                name="edit_file_in_repo",
+                description="""Edit an existing file in the GitHub repository or create a new one if it doesn't exist.
+
+Args:
+    file_path: Path to the file in the repository
+    file_content: New content for the file
+    commit_message: Optional commit message (defaults to auto-generated message)
+    branch: Branch name (defaults to current working branch)
+
+Example: edit_file_in_repo("README.md", "# Updated README\\n\\nNew content here", "Update README")
+
+Returns JSON status report of the edit operation.""",
+                func=self._edit_file_in_repo,
+            ),
         ]
+
+    def _list_files_in_repo(self, path: str = "", branch: str = "main") -> str:
+        """List files and directories in the repository."""
+        import json
+        
+        log_tool_usage("list_files_in_repo", f"path='{path}', branch='{branch}'")
+        
+        try:
+            contents = self.github_client.list_repository_contents(path, branch)
+            result = {
+                "success": True,
+                "path": path,
+                "branch": branch,
+                "contents": contents,
+                "count": len(contents)
+            }
+            log_tool_usage("list_files_in_repo", f"Found {len(contents)} items", "SUCCESS")
+            return json.dumps(result)
+            
+        except Exception as e:
+            error_msg = f"Error listing repository contents: {e}"
+            log_tool_usage("list_files_in_repo", error_msg, "ERROR")
+            return json.dumps({
+                "success": False,
+                "error": error_msg,
+                "path": path,
+                "branch": branch,
+                "contents": []
+            })
+
+    def _read_file_from_repo(self, file_path: str, branch: str = "main") -> str:
+        """Read content of a file from the repository."""
+        import json
+        
+        log_tool_usage("read_file_from_repo", f"file_path='{file_path}', branch='{branch}'")
+        
+        try:
+            content = self.github_client.get_file_content(file_path, branch)
+            if content is None:
+                error_msg = f"File not found: {file_path}"
+                log_tool_usage("read_file_from_repo", error_msg, "ERROR")
+                return json.dumps({
+                    "success": False,
+                    "error": error_msg,
+                    "file_path": file_path,
+                    "branch": branch
+                })
+            
+            result = {
+                "success": True,
+                "file_path": file_path,
+                "branch": branch,
+                "content": content,
+                "length": len(content)
+            }
+            log_tool_usage("read_file_from_repo", f"Read {len(content)} characters", "SUCCESS")
+            return json.dumps(result)
+            
+        except Exception as e:
+            error_msg = f"Error reading file: {e}"
+            log_tool_usage("read_file_from_repo", error_msg, "ERROR")
+            return json.dumps({
+                "success": False,
+                "error": error_msg,
+                "file_path": file_path,
+                "branch": branch
+            })
+
+    def _edit_file_in_repo(
+        self, 
+        file_path: str, 
+        file_content: str, 
+        commit_message: str = None, 
+        branch: str = None
+    ) -> str:
+        """Edit a file in the repository."""
+        import json
+        
+        # Use current branch if not specified
+        if branch is None:
+            branch = getattr(self, "_current_branch", "main")
+        
+        # Generate commit message if not provided
+        if commit_message is None:
+            commit_message = f"Update {file_path}"
+        
+        log_tool_usage("edit_file_in_repo", f"file_path='{file_path}', branch='{branch}'")
+        
+        try:
+            success = self.github_client.create_or_update_file(
+                file_path, file_content, commit_message, branch
+            )
+            
+            if success:
+                result = {
+                    "success": True,
+                    "file_path": file_path,
+                    "branch": branch,
+                    "commit_message": commit_message,
+                    "content_length": len(file_content)
+                }
+                log_tool_usage("edit_file_in_repo", f"Successfully updated {file_path}", "SUCCESS")
+                return json.dumps(result)
+            else:
+                error_msg = f"Failed to update file: {file_path}"
+                log_tool_usage("edit_file_in_repo", error_msg, "ERROR")
+                return json.dumps({
+                    "success": False,
+                    "error": error_msg,
+                    "file_path": file_path,
+                    "branch": branch
+                })
+                
+        except Exception as e:
+            error_msg = f"Error editing file: {e}"
+            log_tool_usage("edit_file_in_repo", error_msg, "ERROR")
+            return json.dumps({
+                "success": False,
+                "error": error_msg,
+                "file_path": file_path,
+                "branch": branch
+            })
 
     # ========================================================================
     # ISSUE PROCESSING WORKFLOW
@@ -850,23 +1014,40 @@ Closes #{issue.number}
         Returns:
             Formatted system prompt string
         """
-        return f"""You are an AI agent that processes GitHub issues to create the exact files requested.
+        return f"""You are an AI agent that processes GitHub issues to manage files in the target repository.
 
-Your task is simple:
-1. Analyze the GitHub issue to identify what files need to be created and their content
-2. Use create_files_from_request with a JSON array of file objects to create the files
-3. Respond with a summary of what was created
-
-For an issue like "Create a new file TEST.md and write in it 'this is a test'":
-- Call create_files_from_request with: [{{"filename": "TEST.md", "file_content": "this is a test"}}]
-
-For multiple files, include all in one call:
-- [{{"filename": "file1.md", "file_content": "content1"}}, {{"filename": "file2.txt", "file_content": "content2"}}]
-
-Be direct and focused. Use only the create_files_from_request tool with properly formatted JSON.
+Your capabilities include:
+1. **Reading repository structure**: Browse files and directories to understand the codebase
+2. **Reading file contents**: View existing file content to understand current state  
+3. **Creating new files**: Add new files with specified content
+4. **Editing existing files**: Modify content of existing files
 
 Available tools:
-- create_files_from_request: Takes JSON array of file objects with filename and file_content properties
+- list_files_in_repo: List files and directories in a path (use empty string "" for root)
+- read_file_from_repo: Read content of a specific file
+- create_files_from_request: Create new files (JSON array of file objects with filename and file_content properties)
+- edit_file_in_repo: Edit existing files or create new ones
+
+Workflow examples:
+
+**For exploring the repository**: 
+1. Use list_files_in_repo("") to see root directory
+2. Use list_files_in_repo("src") to explore subdirectories
+3. Use read_file_from_repo("README.md") to read specific files
+
+**For creating new files**: 
+- Call create_files_from_request with: [{{"filename": "test.md", "file_content": "# Test\\nContent here"}}]
+
+**For editing existing files**:
+1. First read the current content with read_file_from_repo("filename.txt")
+2. Then edit with edit_file_in_repo("filename.txt", "new content", "commit message")
+
+**For complex requests involving existing code**:
+1. Explore repository structure first
+2. Read relevant existing files to understand context
+3. Create or edit files as needed
+
+Be thorough in understanding the repository structure and existing code before making changes.
 
 Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"""
 
