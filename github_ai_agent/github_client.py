@@ -580,3 +580,77 @@ class GitHubClient:
                 f"Error creating issue in {self.target_owner}/{self.target_repo}: {e}"
             )
             return None
+
+    def list_repository_contents(
+        self, path: str = "", branch: str = "main"
+    ) -> List[Dict[str, Any]]:
+        """List contents of a directory in the repository.
+
+        Args:
+            path: Directory path (empty string for root)
+            branch: Branch to list contents from
+
+        Returns:
+            List of dictionaries with file/directory information
+        """
+        try:
+            log_github_action(
+                f"Listing contents of '{path}' in {self.target_owner}/{self.target_repo} on branch '{branch}'"
+            )
+            contents = self.repo.get_contents(path, ref=branch)
+            
+            # Handle both single file and directory contents
+            if not isinstance(contents, list):
+                contents = [contents]
+            
+            result = []
+            for item in contents:
+                result.append({
+                    "name": item.name,
+                    "path": item.path,
+                    "type": item.type,  # "file" or "dir"
+                    "size": item.size if item.type == "file" else None,
+                    "download_url": item.download_url if item.type == "file" else None,
+                })
+            
+            log_github_action(f"Found {len(result)} items in '{path}'")
+            return result
+            
+        except GithubException as e:
+            log_error(
+                f"Error listing contents of '{path}' in {self.target_owner}/{self.target_repo}: {e}"
+            )
+            return []
+
+    def get_file_content(
+        self, file_path: str, branch: str = "main"
+    ) -> Optional[str]:
+        """Get the content of a specific file.
+
+        Args:
+            file_path: Path to the file in the repository
+            branch: Branch to read from
+
+        Returns:
+            File content as string, or None if file not found
+        """
+        try:
+            log_github_action(
+                f"Reading file '{file_path}' from {self.target_owner}/{self.target_repo} on branch '{branch}'"
+            )
+            file_obj = self.repo.get_contents(file_path, ref=branch)
+            
+            # Handle the case where it's a directory (should not happen with correct usage)
+            if file_obj.type != "file":
+                log_error(f"Path '{file_path}' is not a file")
+                return None
+                
+            content = file_obj.decoded_content.decode('utf-8')
+            log_github_action(f"Successfully read file '{file_path}' ({len(content)} characters)")
+            return content
+            
+        except GithubException as e:
+            log_error(
+                f"Error reading file '{file_path}' from {self.target_owner}/{self.target_repo}: {e}"
+            )
+            return None
