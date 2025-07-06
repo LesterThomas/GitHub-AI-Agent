@@ -414,6 +414,17 @@ class GitHubClient:
             True if successful, False otherwise
         """
         try:
+            # First check if the branch already exists
+            try:
+                existing_ref = self.repo.get_git_ref(f"heads/{branch_name}")
+                log_github_action(
+                    f"Branch '{branch_name}' already exists in {self.target_owner}/{self.target_repo}"
+                )
+                return True
+            except GithubException:
+                # Branch doesn't exist, continue with creation
+                pass
+
             log_github_action(
                 f"Creating branch '{branch_name}' in {self.target_owner}/{self.target_repo} from '{from_branch}'"
             )
@@ -598,33 +609,35 @@ class GitHubClient:
                 f"Listing contents of '{path}' in {self.target_owner}/{self.target_repo} on branch '{branch}'"
             )
             contents = self.repo.get_contents(path, ref=branch)
-            
+
             # Handle both single file and directory contents
             if not isinstance(contents, list):
                 contents = [contents]
-            
+
             result = []
             for item in contents:
-                result.append({
-                    "name": item.name,
-                    "path": item.path,
-                    "type": item.type,  # "file" or "dir"
-                    "size": item.size if item.type == "file" else None,
-                    "download_url": item.download_url if item.type == "file" else None,
-                })
-            
+                result.append(
+                    {
+                        "name": item.name,
+                        "path": item.path,
+                        "type": item.type,  # "file" or "dir"
+                        "size": item.size if item.type == "file" else None,
+                        "download_url": (
+                            item.download_url if item.type == "file" else None
+                        ),
+                    }
+                )
+
             log_github_action(f"Found {len(result)} items in '{path}'")
             return result
-            
+
         except GithubException as e:
             log_error(
                 f"Error listing contents of '{path}' in {self.target_owner}/{self.target_repo}: {e}"
             )
             return []
 
-    def get_file_content(
-        self, file_path: str, branch: str = "main"
-    ) -> Optional[str]:
+    def get_file_content(self, file_path: str, branch: str = "main") -> Optional[str]:
         """Get the content of a specific file.
 
         Args:
@@ -639,16 +652,18 @@ class GitHubClient:
                 f"Reading file '{file_path}' from {self.target_owner}/{self.target_repo} on branch '{branch}'"
             )
             file_obj = self.repo.get_contents(file_path, ref=branch)
-            
+
             # Handle the case where it's a directory (should not happen with correct usage)
             if file_obj.type != "file":
                 log_error(f"Path '{file_path}' is not a file")
                 return None
-                
-            content = file_obj.decoded_content.decode('utf-8')
-            log_github_action(f"Successfully read file '{file_path}' ({len(content)} characters)")
+
+            content = file_obj.decoded_content.decode("utf-8")
+            log_github_action(
+                f"Successfully read file '{file_path}' ({len(content)} characters)"
+            )
             return content
-            
+
         except GithubException as e:
             log_error(
                 f"Error reading file '{file_path}' from {self.target_owner}/{self.target_repo}: {e}"
