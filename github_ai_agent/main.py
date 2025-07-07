@@ -60,7 +60,7 @@ class GitHubAIAgentApp:
 
         self.settings = get_settings()
         log_info(f"Target: {self.settings.target_owner}/{self.settings.target_repo}")
-        log_info(f"Label filter: '{self.settings.issue_label}'")
+        log_info(f"Assignee filter: '{self.settings.issue_assignee}'")
         log_info(f"AI Model: {self.settings.openai_model}")
         log_info(f"Max iterations: {self.settings.max_iterations}")
 
@@ -99,10 +99,12 @@ class GitHubAIAgentApp:
         """Poll for new issues and process them."""
         log_section_start("Scanning for Issues")
 
-        log_info(f"Looking for issues labeled '{self.settings.issue_label}'", "POLL")
+        log_info(
+            f"Looking for issues assigned to '{self.settings.issue_assignee}'", "POLL"
+        )
 
-        # Get issues with the specified label
-        issues = self.github_client.get_issues_with_label(self.settings.issue_label)
+        # Get issues assigned to the specified user
+        issues = self.github_client.get_issues_assigned_to(self.settings.issue_assignee)
 
         # Filter out already processed issues
         new_issues = [

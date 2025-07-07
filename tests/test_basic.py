@@ -19,7 +19,7 @@ def test_settings_creation():
         assert settings.openai_api_key == "test_openai_key"
         assert settings.target_owner == "LesterThomas"
         assert settings.target_repo == "SAAA"
-        assert settings.issue_label == "AI Agent"
+        assert settings.issue_assignee == "Test-AI-Agent"
 
 
 def test_github_client_initialization():
@@ -49,6 +49,26 @@ def test_github_client_get_issues(mock_github):
     assert issues[0].number == 1
     assert issues[0].title == "Test Issue"
     mock_repo.get_issues.assert_called_once_with(state="open", labels=["test_label"])
+
+
+@patch("github_ai_agent.github_client.Github")
+def test_github_client_get_issues_assigned_to(mock_github):
+    """Test getting issues assigned to a specific user."""
+    # Mock the GitHub API
+    mock_repo = Mock()
+    mock_issue = Mock()
+    mock_issue.number = 2
+    mock_issue.title = "Assigned Issue"
+    mock_repo.get_issues.return_value = [mock_issue]
+    mock_github.return_value.get_repo.return_value = mock_repo
+
+    client = GitHubClient("test_token", "test_owner", "test_repo")
+    issues = client.get_issues_assigned_to("Test-AI-Agent")
+
+    assert len(issues) == 1
+    assert issues[0].number == 2
+    assert issues[0].title == "Assigned Issue"
+    mock_repo.get_issues.assert_called_once_with(state="open", assignee="Test-AI-Agent")
 
 
 @patch("github_ai_agent.github_client.Github")

@@ -116,11 +116,12 @@ def main():
     try:
         title = "Create TEST.md"
         body = "Create a TEST.md markdown file and in the content of the file make up a poem about clouds."
-        labels = ["AI Agent"]
+        assignees = ["Test-AI-Agent"]
 
-        issue = client.create_issue(title=title, body=body, labels=labels)
+        issue = client.create_issue(title=title, body=body, assignees=assignees)
         if issue:
             print(f"✅ Successfully created new issue #{issue.number}: {title}")
+            print(f"👤 Assigned to: Test-AI-Agent")
             print(f"🔗 Issue URL: {issue.html_url}")
         else:
             print("❌ Failed to create new issue")

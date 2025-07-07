@@ -26,7 +26,10 @@ class Settings(BaseSettings):
         default="LesterThomas", description="Target repository owner"
     )
     target_repo: str = Field(default="SAAA", description="Target repository name")
-    issue_label: str = Field(default="AI Agent", description="Label to filter issues")
+    issue_assignee: str = Field(
+        default="Test-AI-Agent",
+        description="GitHub username to filter issues by assignee",
+    )
 
     # OpenAI settings
     openai_api_key: str = Field(..., description="OpenAI API key")

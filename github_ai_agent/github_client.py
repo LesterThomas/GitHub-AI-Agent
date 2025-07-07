@@ -68,6 +68,23 @@ class GitHubClient:
             log_error(f"Error fetching issues: {e}")
             return []
 
+    def get_issues_assigned_to(self, assignee: str, state: str = "open") -> List[Issue]:
+        """Get issues assigned to a specific user.
+
+        Args:
+            assignee: GitHub username to filter by
+            state: Issue state ('open', 'closed', 'all')
+
+        Returns:
+            List of issues assigned to the specified user
+        """
+        try:
+            issues = self.repo.get_issues(state=state, assignee=assignee)
+            return list(issues)
+        except GithubException as e:
+            log_error(f"Error fetching issues assigned to {assignee}: {e}")
+            return []
+
     def get_issue(self, issue_number: int) -> Optional[Issue]:
         """Get a specific issue by number.
 
@@ -283,7 +300,11 @@ class GitHubClient:
             return False
 
     def create_issue(
-        self, title: str, body: str, labels: Optional[List[str]] = None
+        self,
+        title: str,
+        body: str,
+        labels: Optional[List[str]] = None,
+        assignees: Optional[List[str]] = None,
     ) -> Optional[Issue]:
         """Create a new issue.
 
@@ -291,6 +312,7 @@ class GitHubClient:
             title: Issue title
             body: Issue body
             labels: List of label names
+            assignees: List of GitHub usernames to assign
 
         Returns:
             Issue object or None if creation failed
@@ -299,7 +321,9 @@ class GitHubClient:
             log_github_action(
                 f"Creating issue in {self.target_owner}/{self.target_repo}: '{title}'"
             )
-            issue = self.repo.create_issue(title=title, body=body, labels=labels or [])
+            issue = self.repo.create_issue(
+                title=title, body=body, labels=labels or [], assignees=assignees or []
+            )
             log_github_action(f"Successfully created issue #{issue.number}: {title}")
             return issue
         except GithubException as e:

@@ -215,8 +215,26 @@ class GitHubIssueAgent:
         Returns:
             List of Tool objects that the agent can use
         """
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel, Field
 
-        def create_file_in_repo(file_data: str) -> str:
+        class CreateFileInput(BaseModel):
+            filename: str = Field(description="Path/name of the file to create")
+            file_content: str = Field(description="Content to write to the file")
+
+        class EditFileInput(BaseModel):
+            filename: str = Field(description="Path/name of the file to edit")
+            file_content: str = Field(description="New content for the file")
+
+        class ListFilesInput(BaseModel):
+            path: str = Field(
+                default="", description="Directory path to list (empty string for root)"
+            )
+
+        class ReadFileInput(BaseModel):
+            filename: str = Field(description="Path/name of the file to read")
+
+        def create_file_in_repo(filename: str, file_content: str) -> str:
             """
             Core tool for creating a single file in the GitHub repository.
 
@@ -224,21 +242,9 @@ class GitHubIssueAgent:
             creating a file directly in the target GitHub repository. It's designed
             to be called by the LangGraph ReAct agent as part of its reasoning loop.
 
-            The tool performs several key operations:
-            1. Validates and parses the input data
-            2. Retrieves the current branch context from the agent instance
-            3. Creates the file via the GitHub API
-            4. Returns structured results for the agent to process
-
-            Design Notes:
-            - Uses closure to access the agent instance (self)
-            - Implements comprehensive error handling
-            - Returns JSON for structured data exchange
-            - Creates one file per call for better error handling
-
             Args:
-                file_data: JSON string with filename and file_content
-                          Example: '{"filename": "test.md", "file_content": "# Test\\nThis is a test file"}'
+                filename: Path/name of the file to create
+                file_content: Content to write to the file
 
             Returns:
                 JSON string with creation results including success status,
@@ -246,19 +252,12 @@ class GitHubIssueAgent:
             """
             import json
 
-            log_tool_usage("create_file_in_repo", f"file_data='{file_data[:100]}...'")
+            log_tool_usage(
+                "create_file_in_repo",
+                f"filename='{filename}', content_length={len(file_content)}",
+            )
 
             try:
-                # Parse the input JSON to extract filename and content
-                try:
-                    data = json.loads(file_data)
-                    filename = data.get("filename")
-                    file_content = data.get("file_content", data.get("content"))
-                except json.JSONDecodeError:
-                    error_msg = "Invalid JSON format for file data"
-                    log_error(error_msg)
-                    return json.dumps({"success": False, "error": error_msg})
-
                 # Retrieve the current branch context
                 current_branch = getattr(self, "_current_branch", None)
                 if not current_branch:
@@ -338,10 +337,7 @@ class GitHubIssueAgent:
             log_tool_usage("list_files_in_repo", f"path='{path}'")
 
             try:
-
                 # Retrieve the current branch context
-                # This is set during issue processing and enables the tool
-                # to know which branch to commit to
                 current_branch = getattr(self, "_current_branch", None)
                 if not current_branch:
                     error_msg = "No branch available for listing repository"
@@ -382,10 +378,7 @@ class GitHubIssueAgent:
             log_tool_usage("read_file_from_repo", f"filename='{filename}'")
 
             try:
-
                 # Retrieve the current branch context
-                # This is set during issue processing and enables the tool
-                # to know which branch to commit to
                 current_branch = getattr(self, "_current_branch", None)
                 if not current_branch:
                     error_msg = "No branch available for reading file"
@@ -429,23 +422,16 @@ class GitHubIssueAgent:
                     }
                 )
 
-        def edit_file_in_repo(file_data: str) -> str:
+        def edit_file_in_repo(filename: str, file_content: str) -> str:
             """Edit a file in the repository."""
             import json
 
-            log_tool_usage("edit_file_in_repo", f"file_data='{file_data[:100]}...'")
+            log_tool_usage(
+                "edit_file_in_repo",
+                f"filename='{filename}', content_length={len(file_content)}",
+            )
 
             try:
-                # Parse the input JSON to extract filename and content
-                try:
-                    data = json.loads(file_data)
-                    filename = data.get("filename")
-                    file_content = data.get("file_content", data.get("content"))
-                except json.JSONDecodeError:
-                    error_msg = "Invalid JSON format for file data"
-                    log_error(error_msg)
-                    return json.dumps({"success": False, "error": error_msg})
-
                 # Validate required fields
                 if not filename:
                     error_msg = "Missing filename parameter"
@@ -516,57 +502,31 @@ class GitHubIssueAgent:
                     }
                 )
 
-        # Return the configured tools list
+        # Return the configured tools list using StructuredTool
         return [
-            Tool(
+            StructuredTool(
                 name="create_file_in_repo",
-                description="""Create a single file directly in the GitHub repository. 
-
-Args:
-    file_data: JSON string with filename and file_content
-
-Example: create_file_in_repo('{"filename": "README.md", "file_content": "# Updated README\\n\\nNew content here"}')
-
-This tool creates the file immediately in the GitHub repository and returns a status report. To create multiple files, call this tool multiple times.""",
+                description="Create a single file directly in the GitHub repository.",
                 func=create_file_in_repo,
+                args_schema=CreateFileInput,
             ),
-            Tool(
+            StructuredTool(
                 name="list_files_in_repo",
-                description="""List files and directories in the GitHub repository.
-
-Args:
-    path: Directory path to list (empty string for root directory)
-    branch: Branch name (defaults to 'main')
-
-Example: To list root directory: ""
-Example: To list a subdirectory: "src/components"
-
-Returns JSON with list of files and directories, including names, paths, types, and sizes.""",
+                description="List files and directories in the GitHub repository.",
                 func=list_files_in_repo,
+                args_schema=ListFilesInput,
             ),
-            Tool(
+            StructuredTool(
                 name="read_file_from_repo",
-                description="""Read the content of a specific file from the GitHub repository.
-
-Args:
-    filename: Path to the file in the repository
-
-Example: "README.md" or "src/main.py"
-
-Returns the file content as a string.""",
+                description="Read the content of a specific file from the GitHub repository.",
                 func=read_file_from_repo,
+                args_schema=ReadFileInput,
             ),
-            Tool(
+            StructuredTool(
                 name="edit_file_in_repo",
-                description="""Edit an existing file in the GitHub repository or create a new one if it doesn't exist. 
-
-Args:
-    file_data: JSON string with filename and file_content
-
-Example: edit_file_in_repo('{"filename": "README.md", "file_content": "# Updated README\\n\\nNew content here"}')
-
-Returns JSON status report of the edit operation.""",
+                description="Edit an existing file in the GitHub repository or create a new one if it doesn't exist.",
                 func=edit_file_in_repo,
+                args_schema=EditFileInput,
             ),
         ]
 
@@ -821,7 +781,7 @@ Please process this issue thoughtfully, using the appropriate tools in the right
             issue_number: GitHub issue number
 
         Returns:
-            IssueProcessingResult with success status and metadata
+            IssueProcessingResult with success status and PR details
         """
         # Extract the final response from the agent
         final_message = final_state["messages"][-1]
