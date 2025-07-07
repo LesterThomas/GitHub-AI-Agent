@@ -16,7 +16,11 @@ class Settings(BaseSettings):
     # GitHub settings
     github_token: Optional[str] = Field(
         default=None,
-        description="GitHub API token (deprecated, use GitHub App instead)",
+        description="GitHub API token for human user (used by reset script)",
+    )
+    github_ai_agent_token: Optional[str] = Field(
+        default=None,
+        description="GitHub personal access token for AI Agent persona",
     )
     github_app_id: Optional[str] = Field(default=None, description="GitHub App ID")
     github_client_id: Optional[str] = Field(

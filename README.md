@@ -75,7 +75,8 @@ LOG_LEVEL=INFO
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GITHUB_TOKEN` | *required* | GitHub personal access token with repo permissions |
+| `GITHUB_TOKEN` | *optional* | GitHub personal access token for human user (used by reset script) |
+| `GITHUB_AI_AGENT_TOKEN` | *required* | GitHub personal access token for AI Agent persona |
 | `TARGET_OWNER` | `LesterThomas` | Owner of the target repository where files are created |
 | `TARGET_REPO` | `SAAA` | Name of the target repository for file creation |
 | `ISSUE_LABEL` | `AI Agent` | Label to filter issues for processing |
@@ -104,10 +105,18 @@ LOG_LEVEL=DEBUG
 
 ### API Key Setup
 
-#### GitHub Token
+#### GitHub Tokens
+
+The application uses two separate GitHub tokens:
+
+**AI Agent Token (Required)**
 1. Go to GitHub Settings → Developer settings → Personal access tokens
-2. Generate a new token with `repo` permissions
-3. Add to `.env` as `GITHUB_TOKEN=your_token_here`
+2. Generate a new token with `repo` permissions for the AI Agent persona
+3. Add to `.env` as `GITHUB_AI_AGENT_TOKEN=your_ai_agent_token_here`
+
+**Human User Token (Optional)**
+1. Generate a separate token for human user operations (reset script)
+2. Add to `.env` as `GITHUB_TOKEN=your_human_token_here`
 
 #### OpenAI API Key
 1. Visit https://platform.openai.com/api-keys
@@ -622,15 +631,7 @@ uv run python main.py
 [23:04:18] ℹ️ Label filter: 'AI Agent'
 [23:04:18] ℹ️ AI Model: gpt-4o-mini
 [23:04:18] ℹ️ Max iterations: 20
-[23:04:18] 🐙 Using GitHub App authentication (preferred)
-[23:04:18] 🐙 Attempting GitHub App authentication for App ID: 1496943
-[23:04:18] 🐙 Found private key file: ea-agent.2025-07-02.private-key.pem
-[23:04:18] 🐙 Using private key authentication with file: ea-agent.2025-07-02.private-key.pem
-[23:04:18] 🐙 Successfully generated JWT token
-[23:04:18] 🐙 Found installation ID 73987373 for repository LesterThomas/SAAA
-[23:04:18] 🐙 Successfully generated installation access token (expires: 2025-07-03T23:04:18Z)
-[23:04:18] 🐙 Successfully authenticated GitHub App as installation
-[23:04:18] 🐙 Authenticated via GitHub App
+[23:04:18] 🐙 Authenticated via AI Agent Token
 [23:04:19] 🤖 Initializing GitHub Issue Agent
 [23:04:19] 🤖 Model: gpt-4o-mini, Max iterations: 20
 [23:04:19] 🤖 Recursion limit: 50
