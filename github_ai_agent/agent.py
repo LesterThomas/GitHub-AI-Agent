@@ -237,9 +237,8 @@ class GitHubIssueAgent:
             - Creates one file per call for better error handling
 
             Args:
-                file_data: Either JSON string or pipe-separated filename|content format
-                          JSON Example: '{"filename": "test.md", "file_content": "# Test\\nThis is a test file"}'
-                          Pipe Example: 'test.md|# Test\\nThis is a test file'
+                file_data: JSON string with filename and file_content
+                          Example: '{"filename": "test.md", "file_content": "# Test\\nThis is a test file"}'
 
             Returns:
                 JSON string with creation results including success status,
@@ -250,24 +249,15 @@ class GitHubIssueAgent:
             log_tool_usage("create_file_in_repo", f"file_data='{file_data[:100]}...'")
 
             try:
-                # Parse the input to extract filename and content
-                if file_data.startswith("{"):
-                    # JSON format
-                    try:
-                        data = json.loads(file_data)
-                        filename = data.get("filename")
-                        file_content = data.get("file_content", data.get("content"))
-                    except json.JSONDecodeError:
-                        error_msg = "Invalid JSON format for file data"
-                        log_error(error_msg)
-                        return json.dumps({"success": False, "error": error_msg})
-                else:
-                    # Assume it's pipe-separated format
-                    parts = (
-                        file_data.split("|", 1) if "|" in file_data else [file_data, ""]
-                    )
-                    filename = parts[0].strip()
-                    file_content = parts[1] if len(parts) > 1 else ""
+                # Parse the input JSON to extract filename and content
+                try:
+                    data = json.loads(file_data)
+                    filename = data.get("filename")
+                    file_content = data.get("file_content", data.get("content"))
+                except json.JSONDecodeError:
+                    error_msg = "Invalid JSON format for file data"
+                    log_error(error_msg)
+                    return json.dumps({"success": False, "error": error_msg})
 
                 # Retrieve the current branch context
                 current_branch = getattr(self, "_current_branch", None)
@@ -446,26 +436,15 @@ class GitHubIssueAgent:
             log_tool_usage("edit_file_in_repo", f"file_data='{file_data[:100]}...'")
 
             try:
-                # Parse the input to extract filename and content
-                # The input should be in format: "filename|content" or JSON
-                if file_data.startswith("{"):
-                    # JSON format
-                    try:
-                        data = json.loads(file_data)
-                        filename = data.get("filename")
-                        file_content = data.get("file_content", data.get("content"))
-                    except json.JSONDecodeError:
-                        error_msg = "Invalid JSON format for file data"
-                        log_error(error_msg)
-                        return json.dumps({"success": False, "error": error_msg})
-                else:
-                    # Assume it's pipe-separated format or direct args
-                    # This handles the case where LangGraph passes args as separate strings
-                    parts = (
-                        file_data.split("|", 1) if "|" in file_data else [file_data, ""]
-                    )
-                    filename = parts[0].strip()
-                    file_content = parts[1] if len(parts) > 1 else ""
+                # Parse the input JSON to extract filename and content
+                try:
+                    data = json.loads(file_data)
+                    filename = data.get("filename")
+                    file_content = data.get("file_content", data.get("content"))
+                except json.JSONDecodeError:
+                    error_msg = "Invalid JSON format for file data"
+                    log_error(error_msg)
+                    return json.dumps({"success": False, "error": error_msg})
 
                 # Validate required fields
                 if not filename:
@@ -544,10 +523,9 @@ class GitHubIssueAgent:
                 description="""Create a single file directly in the GitHub repository. 
 
 Args:
-    file_data: Either JSON string with filename and file_content, or filename|content format
+    file_data: JSON string with filename and file_content
 
-JSON Example: create_file_in_repo('{"filename": "README.md", "file_content": "# Updated README\\n\\nNew content here"}')
-Pipe Example: create_file_in_repo("README.md|# Updated README\\n\\nNew content here")
+Example: create_file_in_repo('{"filename": "README.md", "file_content": "# Updated README\\n\\nNew content here"}')
 
 This tool creates the file immediately in the GitHub repository and returns a status report. To create multiple files, call this tool multiple times.""",
                 func=create_file_in_repo,
@@ -583,10 +561,9 @@ Returns the file content as a string.""",
                 description="""Edit an existing file in the GitHub repository or create a new one if it doesn't exist. 
 
 Args:
-    file_data: Either JSON string with filename and file_content, or filename|content format
+    file_data: JSON string with filename and file_content
 
-JSON Example: edit_file_in_repo('{"filename": "README.md", "file_content": "# Updated README\\n\\nNew content here"}')
-Pipe Example: edit_file_in_repo("README.md|# Updated README\\n\\nNew content here")
+Example: edit_file_in_repo('{"filename": "README.md", "file_content": "# Updated README\\n\\nNew content here"}')
 
 Returns JSON status report of the edit operation.""",
                 func=edit_file_in_repo,
@@ -676,8 +653,8 @@ You have access to the following tools to complete this task:
 - read_file_from_repo(filename): Read content of existing files
 
 **File Operations:**
-- create_file_in_repo(file_data): Create a single new file (use JSON format: '{{"filename": "path", "file_content": "content"}}' or pipe format: 'filename|content')
-- edit_file_in_repo(file_data): Edit existing file (use JSON format: '{{"filename": "path", "file_content": "content"}}' or pipe format: 'filename|content')
+- create_file_in_repo(file_data): Create a single new file (use JSON format: '{{"filename": "path", "file_content": "content"}}')
+- edit_file_in_repo(file_data): Edit existing file (use JSON format: '{{"filename": "path", "file_content": "content"}}')
 
 **Workflow Guidelines:**
 
@@ -686,6 +663,7 @@ You have access to the following tools to complete this task:
 2. **For code modifications**: First read existing files to understand the current implementation before making changes.
 
 3. **For new file creation**: Use create_file_in_repo.
+
 
 4. **For multiple files**: Call create_file_in_repo or edit_file_in_repo multiple times, once for each file you need to create.
 

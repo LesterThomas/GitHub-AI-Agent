@@ -22,13 +22,6 @@ class Settings(BaseSettings):
         default=None,
         description="GitHub personal access token for AI Agent persona",
     )
-    github_app_id: Optional[str] = Field(default=None, description="GitHub App ID")
-    github_client_id: Optional[str] = Field(
-        default=None, description="GitHub App Client ID"
-    )
-    github_client_secret: Optional[str] = Field(
-        default=None, description="GitHub App Client Secret"
-    )
     target_owner: str = Field(
         default="LesterThomas", description="Target repository owner"
     )

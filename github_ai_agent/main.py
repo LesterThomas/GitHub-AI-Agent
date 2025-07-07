@@ -64,41 +64,24 @@ class GitHubAIAgentApp:
         log_info(f"AI Model: {self.settings.openai_model}")
         log_info(f"Max iterations: {self.settings.max_iterations}")
 
-        # Initialize GitHub client - prioritize AI Agent token
+        # Initialize GitHub client using token authentication
         if self.settings.github_ai_agent_token:
             self.github_client = GitHubClient(
                 target_owner=self.settings.target_owner,
                 target_repo=self.settings.target_repo,
                 token=self.settings.github_ai_agent_token,
-                prefer_token=True,  # Use AI Agent token for agent operations
             )
             log_github_action("Authenticated via AI Agent Token", "CLIENT_INIT")
-        elif (
-            self.settings.github_app_id
-            and self.settings.github_client_id
-            and self.settings.github_client_secret
-        ):
-            self.github_client = GitHubClient(
-                target_owner=self.settings.target_owner,
-                target_repo=self.settings.target_repo,
-                token=self.settings.github_token,  # Provide token as fallback
-                app_id=self.settings.github_app_id,
-                client_id=self.settings.github_client_id,
-                client_secret=self.settings.github_client_secret,
-                prefer_token=False,  # Use GitHub App as fallback
-            )
-            log_github_action("Authenticated via GitHub App", "CLIENT_INIT")
         elif self.settings.github_token:
             self.github_client = GitHubClient(
                 target_owner=self.settings.target_owner,
                 target_repo=self.settings.target_repo,
                 token=self.settings.github_token,
-                prefer_token=True,  # Use token if no other options available
             )
             log_github_action("Authenticated via Personal Token", "CLIENT_INIT")
         else:
             raise ValueError(
-                "Either GitHub AI Agent token (GITHUB_AI_AGENT_TOKEN), GitHub App credentials, or GitHub token must be provided"
+                "Either GitHub AI Agent token (GITHUB_AI_AGENT_TOKEN) or GitHub token (GITHUB_TOKEN) must be provided"
             )
 
         self.agent = GitHubIssueAgent(
