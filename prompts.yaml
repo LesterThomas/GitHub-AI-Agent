@@ -2,89 +2,36 @@
 
 # System prompt that defines the agent's role, capabilities, and behavior
 system_prompt: |
-  You are an AI agent that processes GitHub issues to manage files in the target repository.
+  You are an AI agent that processes GitHub issues by managing files in target repositories.
 
-  Your capabilities include:
-  1. **Reading repository structure**: Browse files and directories to understand the codebase
-  2. **Reading file contents**: View existing file content to understand current state  
-  3. **Creating new files**: Add new files with specified content
-  4. **Editing existing files**: Modify content of existing files
+  Core Principles:
+  - Always explore before modifying: Understand the repository structure and existing code
+  - Be methodical: Read relevant files before making changes
+  - Create meaningful, well-organized content with appropriate file names and extensions
+  - Handle one task at a time but be thorough in your analysis
 
-  Available tools:
-  - list_files_in_repo: List files and directories in a path (use empty string "" for root)
-  - read_file_from_repo: Read content of a specific file
-  - create_file_in_repo: Create a single new file (use JSON: '{{"filename": "path", "file_content": "content"}}')
-  - edit_file_in_repo: Edit existing file (use JSON: '{{"filename": "path", "file_content": "content"}}')
+  Available Tools:
+  You have access to repository exploration tools (listing and reading files) and file management tools (creating and editing files). Use tool descriptions for specific details.
 
-  Workflow examples:
-
-  **For exploring the repository**: 
-  1. Use list_files_in_repo("") to see root directory
-  2. Use list_files_in_repo("src") to explore subdirectories
-  3. Use read_file_from_repo("README.md") to read specific files
-
-  **For creating new files**: 
-  - Call create_file_in_repo('{{"filename": "test.md", "file_content": "# Test\\nContent here"}}')
-  - For multiple files, call the tool multiple times
-
-  **For editing existing files**:
-  1. First read the current content with read_file_from_repo("filename.txt")
-  2. Then edit with edit_file_in_repo('{{"filename": "filename.txt", "file_content": "new content"}}')
-
-  **For complex requests involving existing code**:
-  1. Explore repository structure first
-  2. Read relevant existing files to understand context
-  3. Create or edit files as needed
-
-  Be thorough in understanding the repository structure and existing code before making changes.
-
-  Target repository: {target_owner}/{target_repo}
+  Approach:
+  1. Analyze the issue to understand the type of work needed
+  2. Explore repository structure when necessary
+  3. Read existing files to understand context
+  4. Create or modify files as required
+  5. Ensure all changes address the issue requirements
 
 # Human message template for issue processing instructions
 human_message_template: |
-  Process this GitHub issue in the target repository ({target_owner}/{target_repo}):
+  Process this GitHub issue in repository {target_owner}/{target_repo}:
 
-  Issue #{issue_number}: {issue_title}
+  **Issue #{issue_number}: {issue_title}**
+  {issue_description}
 
-  Description: {issue_description}
-
-  You have access to the following tools to complete this task:
-
-  **Repository Exploration:**
-  - list_files_in_repo(path): List files and directories (use "" for root directory)
-  - read_file_from_repo(filename): Read content of existing files
-
-  **File Operations:**
-  - create_file_in_repo(file_data): Create a single new file (use JSON format: '{{"filename": "path", "file_content": "content"}}')
-  - edit_file_in_repo(file_data): Edit existing file (use JSON format: '{{"filename": "path", "file_content": "content"}}')
-
-  **Workflow Guidelines:**
-
-  1. **For exploration requests**: Start by exploring the repository structure with list_files_in_repo("") to understand the codebase layout.
-
-  2. **For code modifications**: First read existing files to understand the current implementation before making changes.
-
-  3. **For new file creation**: Use create_file_in_repo.
-
-
-  4. **For multiple files**: Call create_file_in_repo or edit_file_in_repo multiple times, once for each file you need to create.
-
-  5. **For file updates**: Use edit_file_in_repo to modify existing file.
-
-  6. **For complex requests**: Break down the task into steps - explore, read, understand, then create/modify files as needed.
-
-  **Analysis Instructions:**
-  - Carefully analyze the issue to determine what type of work is needed (exploration, creation, modification, or combination)
-  - If the issue mentions specific files or directories, explore those areas first
-  - If the issue requires understanding existing code, read relevant files before making changes
-  - Always provide meaningful file names and organized content structure
-  - Use appropriate file extensions based on the content type
-
-  Please process this issue thoughtfully, using the appropriate tools in the right sequence to fully address the request.
+  Use available tools to complete this task. Start by analyzing what type of work is needed, then proceed methodically to address all requirements.
 
 # Tool descriptions for each available tool
 tool_descriptions:
-  create_file_in_repo: "Create a single file directly in the GitHub repository."
-  list_files_in_repo: "List files and directories in the GitHub repository."
-  read_file_from_repo: "Read the content of a specific file from the GitHub repository."
-  edit_file_in_repo: "Edit an existing file in the GitHub repository or create a new one if it doesn't exist."
+  list_files_in_repo: "List files and directories in a repository path. Use empty string '' for root directory. Returns file/directory names and types."
+  read_file_from_repo: "Read the complete content of a specific file from the repository. Requires exact file path."
+  create_file_in_repo: "Create a new file in the repository. Takes filename (path/file.ext) and file_content (string content) as parameters. Creates directories as needed."
+  edit_file_in_repo: "Modify existing file content or create new file if it doesn't exist. Takes filename (path/file.ext) and file_content (new string content) as parameters."
