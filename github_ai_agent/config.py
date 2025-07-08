@@ -24,6 +24,14 @@ class Settings(BaseSettings):
         default=None,
         description="GitHub personal access token for AI Agent persona",
     )
+    github_app_id: Optional[str] = Field(
+        default=None,
+        description="GitHub App ID for authentication",
+    )
+    github_app_private_key_file: Optional[str] = Field(
+        default=None,
+        description="Path to GitHub App private key file",
+    )
     target_owner: str = Field(
         default="LesterThomas", description="Target repository owner"
     )
@@ -58,9 +66,9 @@ def load_prompts() -> Dict[str, Any]:
     # Get the directory containing this config.py file
     config_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     prompts_file = os.path.join(config_dir, "prompts.yaml")
-    
+
     try:
-        with open(prompts_file, 'r', encoding='utf-8') as f:
+        with open(prompts_file, "r", encoding="utf-8") as f:
             prompts = yaml.safe_load(f)
         return prompts
     except FileNotFoundError:
@@ -73,17 +81,16 @@ def get_system_prompt(target_owner: str, target_repo: str) -> str:
     """Get the system prompt with target repository information."""
     prompts = load_prompts()
     return prompts["system_prompt"].format(
-        target_owner=target_owner,
-        target_repo=target_repo
+        target_owner=target_owner, target_repo=target_repo
     )
 
 
 def get_human_message_template(
-    target_owner: str, 
-    target_repo: str, 
-    issue_number: int, 
-    issue_title: str, 
-    issue_description: str
+    target_owner: str,
+    target_repo: str,
+    issue_number: int,
+    issue_title: str,
+    issue_description: str,
 ) -> str:
     """Get the human message template with issue information."""
     prompts = load_prompts()
@@ -92,7 +99,7 @@ def get_human_message_template(
         target_repo=target_repo,
         issue_number=issue_number,
         issue_title=issue_title,
-        issue_description=issue_description
+        issue_description=issue_description,
     )
 
 

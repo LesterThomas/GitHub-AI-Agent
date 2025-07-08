@@ -1,13 +1,13 @@
 """GitHub API client for polling issues and creating pull requests."""
 
 import logging
+import jwt
 import time
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
 import requests
 from github import Github
-from github.GithubApp import GithubApp
 from github.Issue import Issue
 from github.PullRequest import PullRequest
 from github.Repository import Repository
@@ -28,7 +28,7 @@ class GitHubClient:
         token: Optional[str] = None,
         app_id: Optional[str] = None,
         private_key_file: Optional[str] = None,
-        client_id: Optional[str] = None,
+        use_github_app: bool = False,
     ):
         """Initialize the GitHub client.
 
@@ -38,7 +38,6 @@ class GitHubClient:
             token: GitHub API token
             app_id: GitHub App ID (for App authentication fallback)
             private_key_file: Path to GitHub App private key file
-            client_id: GitHub App client ID
         """
         self.target_owner = target_owner
         self.target_repo = target_repo
@@ -46,7 +45,7 @@ class GitHubClient:
         self.auth_method = None
 
         # Try token authentication first
-        if token:
+        if token and not use_github_app:
             try:
                 log_github_action("Attempting GitHub token authentication")
                 self.github = Github(token)
@@ -64,55 +63,13 @@ class GitHubClient:
         if app_id and private_key_file:
             try:
                 log_github_action("Attempting GitHub App authentication")
-
-                # Read the private key file
-                private_key_path = Path(private_key_file)
-                if not private_key_path.exists():
-                    raise FileNotFoundError(
-                        f"Private key file not found: {private_key_file}"
-                    )
-
-                with open(private_key_path, "r") as f:
-                    private_key = f.read()
-
-                # Create GitHub App instance
-                github_obj = Github()
-                app = github_obj.get_app(app_id, private_key)
-
-                # Get installation for the target repository
-                installation = None
-                for inst in app.get_installations():
-                    try:
-                        # Check if this installation has access to our target repo
-                        repos = inst.get_repos()
-                        for repo in repos:
-                            if (
-                                repo.owner.login == target_owner
-                                and repo.name == target_repo
-                            ):
-                                installation = inst
-                                break
-                        if installation:
-                            break
-                    except Exception as e:
-                        log_error(f"Error checking installation: {e}")
-                        continue
-
-                if not installation:
-                    raise ValueError(
-                        f"No GitHub App installation found for repository {target_owner}/{target_repo}"
-                    )
-
-                # Get access token for the installation
-                self.github = installation.get_github_for_installation()
-
+                self.github = self._create_github_app_client(app_id, private_key_file)
                 # Test the connection
                 test_repo = self.github.get_repo(f"{target_owner}/{target_repo}")
                 _ = test_repo.full_name
                 log_github_action("✅ GitHub App authentication successful")
                 self.auth_method = "app"
                 return
-
             except Exception as e:
                 log_error(f"❌ GitHub App authentication failed: {e}")
 
@@ -123,6 +80,205 @@ class GitHubClient:
             raise ValueError(
                 "Either GitHub token or App credentials (app_id, private_key_file) must be provided"
             )
+
+    def _generate_jwt_token(self, app_id: str, private_key_file: str) -> str:
+        """Generate JWT token for GitHub App authentication.
+
+        Args:
+            app_id: GitHub App ID
+            private_key_file: Path to private key file
+
+        Returns:
+            JWT token
+        """
+        try:
+            # Read private key
+            with open(private_key_file, "rb") as key_file:
+                private_key = key_file.read()
+
+            # Create JWT payload
+            now = int(time.time())
+            payload = {
+                "iat": now
+                - 60,  # Issued at time (60 seconds ago to account for clock drift)
+                "exp": now
+                + 300,  # Expiration time (5 minutes from now, max allowed by GitHub)
+                "iss": int(app_id),  # Issuer (GitHub App ID) - must be integer
+            }
+
+            # Generate JWT token using RS256 algorithm
+            jwt_token = jwt.encode(payload, private_key, algorithm="RS256")
+            log_github_action("Successfully generated JWT token")
+            return jwt_token
+
+        except Exception as e:
+            log_error(f"Failed to generate JWT token: {e}")
+            raise
+
+    def _get_installation_id(self, jwt_token: str) -> int:
+        """Get installation ID for the target repository.
+
+        Args:
+            jwt_token: JWT token for GitHub App
+
+        Returns:
+            Installation ID
+        """
+        try:
+            # First, try to get installation for the specific repository
+            response = requests.get(
+                f"https://api.github.com/repos/{self.target_owner}/{self.target_repo}/installation",
+                headers={
+                    "Authorization": f"Bearer {jwt_token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "GitHub-AI-Agent/1.0",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+
+            if response.status_code == 200:
+                installation_data = response.json()
+                installation_id = installation_data["id"]
+                log_github_action(
+                    f"Found installation ID {installation_id} for repository {self.target_owner}/{self.target_repo}"
+                )
+                return installation_id
+            else:
+                log_error(
+                    f"Failed to get installation for repository: {response.status_code} - {response.text}"
+                )
+
+                # Fallback: list all installations and find the right one
+                response = requests.get(
+                    "https://api.github.com/app/installations",
+                    headers={
+                        "Authorization": f"Bearer {jwt_token}",
+                        "Accept": "application/vnd.github+json",
+                        "User-Agent": "GitHub-AI-Agent/1.0",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    },
+                )
+
+                if response.status_code == 200:
+                    installations = response.json()
+                    log_github_action(f"Found {len(installations)} installations")
+
+                    for installation in installations:
+                        # Check if this installation has access to our target repository
+                        if (
+                            installation.get("account", {}).get("login")
+                            == self.target_owner
+                        ):
+                            log_github_action(
+                                f"Found matching installation for owner {self.target_owner}"
+                            )
+                            return installation["id"]
+
+                    # If we have any installation, use the first one
+                    if installations:
+                        log_github_action(
+                            f"Using first available installation ID: {installations[0]['id']}"
+                        )
+                        return installations[0]["id"]
+
+                response.raise_for_status()
+
+        except Exception as e:
+            log_error(f"Failed to get installation ID: {e}")
+            raise
+
+    def _generate_installation_access_token(
+        self, jwt_token: str, installation_id: int
+    ) -> str:
+        """Generate installation access token.
+
+        Args:
+            jwt_token: JWT token for GitHub App
+            installation_id: Installation ID
+
+        Returns:
+            Installation access token
+        """
+        try:
+            response = requests.post(
+                f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+                headers={
+                    "Authorization": f"Bearer {jwt_token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "GitHub-AI-Agent/1.0",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                json={
+                    "repositories": [self.target_repo],
+                    "permissions": {
+                        "contents": "write",
+                        "issues": "write",
+                        "pull_requests": "write",
+                    },
+                },
+            )
+
+            if response.status_code == 201:
+                token_data = response.json()
+                access_token = token_data["token"]
+                expires_at = token_data.get("expires_at", "Unknown")
+                log_github_action(
+                    f"Successfully generated installation access token (expires: {expires_at})"
+                )
+                return access_token
+            else:
+                log_error(
+                    f"Failed to generate installation access token: {response.status_code} - {response.text}"
+                )
+                response.raise_for_status()
+
+        except Exception as e:
+            log_error(f"Failed to generate installation access token: {e}")
+            raise
+
+    def _create_github_app_client(self, app_id: str, private_key_file: str) -> Github:
+        """Create GitHub client using GitHub App authentication.
+
+        Args:
+            app_id: GitHub App ID
+            private_key_file: Path to private key file
+
+        Returns:
+            Authenticated GitHub client
+        """
+        log_github_action(f"Attempting GitHub App authentication for App ID: {app_id}")
+
+        try:
+            # Check if private key file exists
+            private_key_path = Path(private_key_file)
+            if not private_key_path.exists():
+                raise FileNotFoundError(
+                    f"Private key file not found: {private_key_file}"
+                )
+
+            log_github_action(
+                f"Using private key authentication with file: {private_key_file}"
+            )
+
+            # Generate JWT token
+            jwt_token = self._generate_jwt_token(app_id, private_key_file)
+
+            # Get installation ID
+            installation_id = self._get_installation_id(jwt_token)
+
+            # Generate installation access token
+            access_token = self._generate_installation_access_token(
+                jwt_token, installation_id
+            )
+
+            # Create GitHub client with installation access token
+            github_client = Github(access_token)
+            log_github_action("Successfully authenticated GitHub App as installation")
+            return github_client
+
+        except Exception as e:
+            log_error(f"GitHub App authentication failed: {e}")
+            raise
 
     @property
     def repo(self) -> Repository:

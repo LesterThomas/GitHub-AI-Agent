@@ -65,7 +65,17 @@ class GitHubAIAgentApp:
         log_info(f"Max iterations: {self.settings.max_iterations}")
 
         # Initialize GitHub client using token authentication
-        if self.settings.github_ai_agent_token:
+        # Initialize GitHub client using GitHub App authentication as first option
+        if self.settings.github_app_id and self.settings.github_app_private_key_file:
+            self.github_client = GitHubClient(
+                target_owner=self.settings.target_owner,
+                target_repo=self.settings.target_repo,
+                app_id=self.settings.github_app_id,
+                private_key_file=self.settings.github_app_private_key_file,
+                use_github_app=True,
+            )
+            log_github_action("Authenticated via GitHub App", "CLIENT_INIT")
+        elif self.settings.github_ai_agent_token:
             self.github_client = GitHubClient(
                 target_owner=self.settings.target_owner,
                 target_repo=self.settings.target_repo,
