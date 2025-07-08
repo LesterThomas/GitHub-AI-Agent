@@ -11,10 +11,8 @@ The agent uses OpenAI's language models and GitHub's API to provide an automated
 workflow for issue resolution.
 """
 
-import ast
 import json
 import logging
-import re
 from dataclasses import dataclass
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
@@ -22,7 +20,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import Tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 
@@ -31,14 +29,9 @@ from .config import get_system_prompt, get_human_message_template, get_tool_desc
 from .logging_utils import (
     Colors,
     log_agent_action,
-    log_github_action,
     log_llm_interaction,
     log_tool_usage,
     log_error,
-    log_info,
-    log_section_start,
-    print_separator,
-    pretty_print_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -606,7 +599,7 @@ class GitHubIssueAgent:
                     target_repo=self.github_client.target_repo,
                     issue_number=issue.number,
                     issue_title=issue.title,
-                    issue_description=issue.body or 'No description provided'
+                    issue_description=issue.body or "No description provided",
                 )
             )
 
@@ -1003,7 +996,7 @@ Closes #{issue.number}
         """
         return get_system_prompt(
             target_owner=self.github_client.target_owner,
-            target_repo=self.github_client.target_repo
+            target_repo=self.github_client.target_repo,
         )
 
     def _describe_file(self, filename: str) -> str:
