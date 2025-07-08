@@ -121,7 +121,6 @@ def main():
         issue = client.create_issue(title=title, body=body, assignees=assignees)
         if issue:
             print(f"✅ Successfully created new issue #{issue.number}: {title}")
-            print(f"👤 Assigned to: Test-AI-Agent")
             print(f"🔗 Issue URL: {issue.html_url}")
         else:
             print("❌ Failed to create new issue")

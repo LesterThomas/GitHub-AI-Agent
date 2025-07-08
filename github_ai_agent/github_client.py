@@ -7,6 +7,7 @@ from pathlib import Path
 
 import requests
 from github import Github
+from github.GithubApp import GithubApp
 from github.Issue import Issue
 from github.PullRequest import PullRequest
 from github.Repository import Repository
@@ -25,6 +26,9 @@ class GitHubClient:
         target_owner: str,
         target_repo: str,
         token: Optional[str] = None,
+        app_id: Optional[str] = None,
+        private_key_file: Optional[str] = None,
+        client_id: Optional[str] = None,
     ):
         """Initialize the GitHub client.
 
@@ -32,17 +36,93 @@ class GitHubClient:
             target_owner: Repository owner
             target_repo: Repository name
             token: GitHub API token
+            app_id: GitHub App ID (for App authentication fallback)
+            private_key_file: Path to GitHub App private key file
+            client_id: GitHub App client ID
         """
         self.target_owner = target_owner
         self.target_repo = target_repo
         self._repo: Optional[Repository] = None
+        self.auth_method = None
 
-        # Use token authentication
+        # Try token authentication first
         if token:
-            log_github_action("Using GitHub token authentication")
-            self.github = Github(token)
+            try:
+                log_github_action("Attempting GitHub token authentication")
+                self.github = Github(token)
+                # Test the connection
+                test_repo = self.github.get_repo(f"{target_owner}/{target_repo}")
+                _ = test_repo.full_name
+                log_github_action("✅ GitHub token authentication successful")
+                self.auth_method = "token"
+                return
+            except Exception as e:
+                log_error(f"❌ GitHub token authentication failed: {e}")
+                log_github_action("Falling back to GitHub App authentication...")
+
+        # Fallback to GitHub App authentication
+        if app_id and private_key_file:
+            try:
+                log_github_action("Attempting GitHub App authentication")
+
+                # Read the private key file
+                private_key_path = Path(private_key_file)
+                if not private_key_path.exists():
+                    raise FileNotFoundError(
+                        f"Private key file not found: {private_key_file}"
+                    )
+
+                with open(private_key_path, "r") as f:
+                    private_key = f.read()
+
+                # Create GitHub App instance
+                github_obj = Github()
+                app = github_obj.get_app(app_id, private_key)
+
+                # Get installation for the target repository
+                installation = None
+                for inst in app.get_installations():
+                    try:
+                        # Check if this installation has access to our target repo
+                        repos = inst.get_repos()
+                        for repo in repos:
+                            if (
+                                repo.owner.login == target_owner
+                                and repo.name == target_repo
+                            ):
+                                installation = inst
+                                break
+                        if installation:
+                            break
+                    except Exception as e:
+                        log_error(f"Error checking installation: {e}")
+                        continue
+
+                if not installation:
+                    raise ValueError(
+                        f"No GitHub App installation found for repository {target_owner}/{target_repo}"
+                    )
+
+                # Get access token for the installation
+                self.github = installation.get_github_for_installation()
+
+                # Test the connection
+                test_repo = self.github.get_repo(f"{target_owner}/{target_repo}")
+                _ = test_repo.full_name
+                log_github_action("✅ GitHub App authentication successful")
+                self.auth_method = "app"
+                return
+
+            except Exception as e:
+                log_error(f"❌ GitHub App authentication failed: {e}")
+
+        # If we get here, both authentication methods failed
+        if token or (app_id and private_key_file):
+            raise ValueError("Both GitHub token and App authentication failed")
         else:
-            raise ValueError("GitHub token must be provided")
+            raise ValueError(
+                "Either GitHub token or App credentials (app_id, private_key_file) must be provided"
+            )
 
     @property
     def repo(self) -> Repository:
@@ -317,20 +397,43 @@ class GitHubClient:
         Returns:
             Issue object or None if creation failed
         """
+        log_github_action(
+            f"Creating issue in {self.target_owner}/{self.target_repo}: '{title}'"
+        )
+
         try:
-            log_github_action(
-                f"Creating issue in {self.target_owner}/{self.target_repo}: '{title}'"
-            )
             issue = self.repo.create_issue(
                 title=title, body=body, labels=labels or [], assignees=assignees or []
             )
             log_github_action(f"Successfully created issue #{issue.number}: {title}")
             return issue
         except GithubException as e:
-            log_error(
-                f"Error creating issue in {self.target_owner}/{self.target_repo}: {e}"
-            )
-            return None
+            # Check if the error is related to invalid assignees
+            if "assignees" in str(e) and assignees:
+                log_github_action(
+                    f"Assignment failed, using fallback with 'AI Agent' label: {e}"
+                )
+                # Fallback: Create issue without assignees but add 'AI Agent' label
+                fallback_labels = (labels or []).copy()
+                if "AI Agent" not in fallback_labels:
+                    fallback_labels.append("AI Agent")
+
+                try:
+                    issue = self.repo.create_issue(
+                        title=title, body=body, labels=fallback_labels, assignees=[]
+                    )
+                    log_github_action(
+                        f"Successfully created issue #{issue.number} with fallback labeling: {title}"
+                    )
+                    return issue
+                except GithubException as fallback_error:
+                    log_error(f"Fallback issue creation also failed: {fallback_error}")
+                    return None
+            else:
+                log_error(
+                    f"Error creating issue in {self.target_owner}/{self.target_repo}: {e}"
+                )
+                return None
 
     def list_repository_contents(
         self, path: str = "", branch: str = "main"

@@ -112,8 +112,29 @@ class GitHubAIAgentApp:
         ]
 
         if not new_issues:
-            log_info("No new issues to process")
-            return
+            log_info(
+                "No assigned issues found, checking for 'AI Agent' labeled issues",
+                "POLL",
+            )
+
+            # Look for issues with 'AI Agent' label
+            labeled_issues = self.github_client.get_issues_with_label("AI Agent")
+
+            # Filter out already processed issues and take only the first one
+            unprocessed_labeled = [
+                issue
+                for issue in labeled_issues
+                if issue.number not in self.processed_issues
+            ]
+
+            if unprocessed_labeled:
+                new_issues = [unprocessed_labeled[0]]  # Take only the first issue
+                log_info(
+                    f"Found issue #{new_issues[0].number} with 'AI Agent' label", "POLL"
+                )
+            else:
+                log_info("No new issues to process")
+                return
 
         log_info(f"Discovered {len(new_issues)} unprocessed issues", "NEW_ISSUES")
         print_separator()
