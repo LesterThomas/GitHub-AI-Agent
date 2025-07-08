@@ -244,46 +244,22 @@ The agent uses LanGraph's ReAct (Reasoning and Acting) pattern with the followin
 
 ### System Prompt
 
-The agent uses this enhanced system prompt to guide its behavior:
+The agent uses a comprehensive system prompt that is now configured in the `prompts.yaml` file for easy maintenance and updates. The system prompt guides the agent's behavior and includes:
 
-```
-You are an AI agent that processes GitHub issues to manage files in the target repository.
+- **Role Definition**: AI agent for processing GitHub issues and managing repository files
+- **Capabilities**: Reading repository structure, file contents, creating and editing files
+- **Available Tools**: Detailed descriptions of list_files_in_repo, read_file_from_repo, create_file_in_repo, and edit_file_in_repo
+- **Workflow Examples**: Step-by-step guidance for different types of tasks
+- **Analysis Instructions**: Guidelines for determining work needed and best practices
 
-Your capabilities include:
-1. Reading repository structure: Browse files and directories to understand the codebase
-2. Reading file contents: View existing file content to understand current state  
-3. Creating new files: Add new files with specified content
-4. Editing existing files: Modify content of existing files
+**Configuration Management**: 
+All prompts (system prompt, human message templates, and tool descriptions) are now stored in `prompts.yaml` for:
+- Easy updates without code changes
+- Better separation of configuration from code
+- Centralized prompt management
+- Version control of prompt changes
 
-Available tools:
-- list_files_in_repo: List files and directories in a path (use empty string "" for root)
-- read_file_from_repo: Read content of a specific file
-- create_files_from_request: Create new files (JSON array of file objects with filename and file_content properties)
-- edit_file_in_repo: Edit existing files or create new ones
-
-Workflow examples:
-
-For exploring the repository: 
-1. Use list_files_in_repo("") to see root directory
-2. Use list_files_in_repo("src") to explore subdirectories
-3. Use read_file_from_repo("README.md") to read specific files
-
-For creating new files: 
-- Call create_files_from_request with: [{"filename": "test.md", "file_content": "# Test\nContent here"}]
-
-For editing existing files:
-1. First read the current content with read_file_from_repo("filename.txt")
-2. Then edit with edit_file_in_repo("filename.txt", "new content", "commit message")
-
-For complex requests involving existing code:
-1. Explore repository structure first
-2. Read relevant existing files to understand context
-3. Create or edit files as needed
-
-Be thorough in understanding the repository structure and existing code before making changes.
-
-Target repository: {target_owner}/{target_repo}
-```
+The system prompt automatically includes the target repository information (`{target_owner}/{target_repo}`) when loaded.
 
 ### Tool Description
 

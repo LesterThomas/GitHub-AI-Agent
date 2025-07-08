@@ -27,6 +27,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 
 from .github_client import GitHubClient
+from .config import get_system_prompt, get_human_message_template, get_tool_description
 from .logging_utils import (
     Colors,
     log_agent_action,
@@ -506,25 +507,25 @@ class GitHubIssueAgent:
         return [
             StructuredTool(
                 name="create_file_in_repo",
-                description="Create a single file directly in the GitHub repository.",
+                description=get_tool_description("create_file_in_repo"),
                 func=create_file_in_repo,
                 args_schema=CreateFileInput,
             ),
             StructuredTool(
                 name="list_files_in_repo",
-                description="List files and directories in the GitHub repository.",
+                description=get_tool_description("list_files_in_repo"),
                 func=list_files_in_repo,
                 args_schema=ListFilesInput,
             ),
             StructuredTool(
                 name="read_file_from_repo",
-                description="Read the content of a specific file from the GitHub repository.",
+                description=get_tool_description("read_file_from_repo"),
                 func=read_file_from_repo,
                 args_schema=ReadFileInput,
             ),
             StructuredTool(
                 name="edit_file_in_repo",
-                description="Edit an existing file in the GitHub repository or create a new one if it doesn't exist.",
+                description=get_tool_description("edit_file_in_repo"),
                 func=edit_file_in_repo,
                 args_schema=EditFileInput,
             ),
@@ -600,45 +601,13 @@ class GitHubIssueAgent:
 
             # Human message provides the specific issue context and instructions
             human_message = HumanMessage(
-                content=f"""Process this GitHub issue in the target repository ({self.github_client.target_owner}/{self.github_client.target_repo}):
-
-Issue #{issue.number}: {issue.title}
-
-Description: {issue.body or 'No description provided'}
-
-You have access to the following tools to complete this task:
-
-**Repository Exploration:**
-- list_files_in_repo(path): List files and directories (use "" for root directory)
-- read_file_from_repo(filename): Read content of existing files
-
-**File Operations:**
-- create_file_in_repo(file_data): Create a single new file (use JSON format: '{{"filename": "path", "file_content": "content"}}')
-- edit_file_in_repo(file_data): Edit existing file (use JSON format: '{{"filename": "path", "file_content": "content"}}')
-
-**Workflow Guidelines:**
-
-1. **For exploration requests**: Start by exploring the repository structure with list_files_in_repo("") to understand the codebase layout.
-
-2. **For code modifications**: First read existing files to understand the current implementation before making changes.
-
-3. **For new file creation**: Use create_file_in_repo.
-
-
-4. **For multiple files**: Call create_file_in_repo or edit_file_in_repo multiple times, once for each file you need to create.
-
-5. **For file updates**: Use edit_file_in_repo to modify existing file.
-
-6. **For complex requests**: Break down the task into steps - explore, read, understand, then create/modify files as needed.
-
-**Analysis Instructions:**
-- Carefully analyze the issue to determine what type of work is needed (exploration, creation, modification, or combination)
-- If the issue mentions specific files or directories, explore those areas first
-- If the issue requires understanding existing code, read relevant files before making changes
-- Always provide meaningful file names and organized content structure
-- Use appropriate file extensions based on the content type
-
-Please process this issue thoughtfully, using the appropriate tools in the right sequence to fully address the request."""
+                content=get_human_message_template(
+                    target_owner=self.github_client.target_owner,
+                    target_repo=self.github_client.target_repo,
+                    issue_number=issue.number,
+                    issue_title=issue.title,
+                    issue_description=issue.body or 'No description provided'
+                )
             )
 
             log_agent_action(
@@ -1026,49 +995,16 @@ Closes #{issue.number}
         3. The tools available and how to use them
         4. The expected output format
 
-        This prompt is designed to be clear and specific to minimize
-        ambiguity and ensure consistent behavior across different issues.
+        This prompt is loaded from YAML configuration to maintain consistency
+        and allow easy updates without code changes.
 
         Returns:
             Formatted system prompt string
         """
-        return f"""You are an AI agent that processes GitHub issues to manage files in the target repository.
-
-Your capabilities include:
-1. **Reading repository structure**: Browse files and directories to understand the codebase
-2. **Reading file contents**: View existing file content to understand current state  
-3. **Creating new files**: Add new files with specified content
-4. **Editing existing files**: Modify content of existing files
-
-Available tools:
-- list_files_in_repo: List files and directories in a path (use empty string "" for root)
-- read_file_from_repo: Read content of a specific file
-- create_file_in_repo: Create a single new file (use JSON: '{{"filename": "path", "file_content": "content"}}')
-- edit_file_in_repo: Edit existing file (use JSON: '{{"filename": "path", "file_content": "content"}}')
-
-Workflow examples:
-
-**For exploring the repository**: 
-1. Use list_files_in_repo("") to see root directory
-2. Use list_files_in_repo("src") to explore subdirectories
-3. Use read_file_from_repo("README.md") to read specific files
-
-**For creating new files**: 
-- Call create_file_in_repo('{{"filename": "test.md", "file_content": "# Test\\nContent here"}}')
-- For multiple files, call the tool multiple times
-
-**For editing existing files**:
-1. First read the current content with read_file_from_repo("filename.txt")
-2. Then edit with edit_file_in_repo('{{"filename": "filename.txt", "file_content": "new content"}}')
-
-**For complex requests involving existing code**:
-1. Explore repository structure first
-2. Read relevant existing files to understand context
-3. Create or edit files as needed
-
-Be thorough in understanding the repository structure and existing code before making changes.
-
-Target repository: {self.github_client.target_owner}/{self.github_client.target_repo}"""
+        return get_system_prompt(
+            target_owner=self.github_client.target_owner,
+            target_repo=self.github_client.target_repo
+        )
 
     def _describe_file(self, filename: str) -> str:
         """
