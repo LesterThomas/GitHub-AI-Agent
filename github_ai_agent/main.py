@@ -64,9 +64,15 @@ class GitHubAIAgentApp:
         log_info(f"AI Model: {self.settings.openai_model}")
         log_info(f"Max iterations: {self.settings.max_iterations}")
 
-        # Initialize GitHub client using token authentication
-        # Initialize GitHub client using GitHub App authentication as first option
-        if self.settings.github_app_id and self.settings.github_app_private_key_file:
+        # Check if --force-app-auth is provided
+        force_app_auth = len(sys.argv) > 1 and "--force-app-auth" in sys.argv
+
+        # Initialize GitHub client using GitHub App authentication as first option only if --force-app-auth is provided
+        if (
+            force_app_auth
+            and self.settings.github_app_id
+            and self.settings.github_app_private_key_file
+        ):
             self.github_client = GitHubClient(
                 target_owner=self.settings.target_owner,
                 target_repo=self.settings.target_repo,
@@ -74,15 +80,19 @@ class GitHubAIAgentApp:
                 private_key_file=self.settings.github_app_private_key_file,
                 use_github_app=True,
             )
-            log_github_action("Authenticated via GitHub App", "CLIENT_INIT")
-        elif self.settings.github_ai_agent_token:
+            log_github_action("Authenticated via GitHub App (forced)", "CLIENT_INIT")
+        elif (
+            self.settings.github_ai_agent_token
+        ):  # Initialize GitHub client using token authentication for Test-AI-Agent
             self.github_client = GitHubClient(
                 target_owner=self.settings.target_owner,
                 target_repo=self.settings.target_repo,
                 token=self.settings.github_ai_agent_token,
             )
             log_github_action("Authenticated via AI Agent Token", "CLIENT_INIT")
-        elif self.settings.github_token:
+        elif (
+            self.settings.github_token
+        ):  # Initialize GitHub client using token authentication for human user
             self.github_client = GitHubClient(
                 target_owner=self.settings.target_owner,
                 target_repo=self.settings.target_repo,
