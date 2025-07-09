@@ -1,21 +1,16 @@
 {
   "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "C:\\Users\\leste\\Downloads"
-      ]
+    "aiva": {
+      "url": "http://localhost:8000",
+      "headers": {
+        "Authorization": "Bearer your_token_here"
+      }
     },
-    "github": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-github"
-      ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "your_github_token_here"
+    "another-mcp-server": {
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer another_token_here",
+        "X-Custom-Header": "custom_value"
       }
     }
   }
