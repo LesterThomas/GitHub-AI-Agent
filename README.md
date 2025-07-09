@@ -403,12 +403,12 @@ The agent follows this detailed workflow from GitHub issue polling to PR creatio
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │ 9. ISSUE        │ -> │ 10. LOGGING &    │ -> │ 11. COMPLETION  │
 │    COMMENT      │    │     TRACKING     │    │                 │
-│                 │    │                  │    │ • Mark issue    │
-│ • Add comment   │    │ • Color-coded    │    │   as processed  │
-│   with PR link  │    │   console logs   │    │ • Return        │
-│ • Close or      │    │ • State tracking │    │   success       │
-│   reference     │    │ • Error handling │    │   status        │
-│   issue         │    │                  │    │                 │
+│                 │    │                  │    │ • Mark issue    |
+│ • Add comment   │    │ • Color-coded    │    │   as processed  |
+│   with PR link  │    │   console logs   │    │ • Return        |
+│ • Close or      │    │ • State tracking │    │   success       |
+│   reference     │    │ • Error handling │    │   status        |
+│   issue         │    │                  │    │                 |
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
@@ -421,11 +421,16 @@ The agent follows this detailed workflow from GitHub issue polling to PR creatio
 - **Early Branch**: Creates feature branch immediately upon issue detection
 
 #### 4-6. Agent Initialization, Reasoning & Tool Execution
-- **LLM Model**: GPT-4 (configurable via `OPENAI_MODEL`)
-- **ReAct Pattern**: Uses LanGraph's built-in ReAct agent
-- **Reasoning**: Analyzes issue requirements and plans file creation
-- **Single Tool**: `create_files_from_request` for direct file creation in GitHub
-- **Direct Creation**: Files are created immediately in GitHub, no intermediate processing
+- **LLM Model**: GPT-4o-mini (configurable via `OPENAI_MODEL`)
+- **ReAct Pattern**: Uses LanGraph's built-in ReAct agent with MemorySaver checkpointing
+- **Reasoning**: Analyzes issue requirements and plans file operations
+- **Multiple Tools**: 5 comprehensive tools for repository management:
+  - `create_file_in_repo`: Create new files in the target repository
+  - `edit_file_in_repo`: Modify existing files
+  - `read_file_from_repo`: Read file contents for context
+  - `list_files_in_repo`: Explore repository structure
+  - `delete_file_from_repo`: Remove files when needed
+- **Direct Creation**: Files are created immediately in GitHub with proper commit messages
 
 #### 7-8. Status Check & Pull Request Creation
 - **Target Repository**: SAAA repository (separate from issue source)
@@ -464,13 +469,33 @@ GitHub-AI-Agent/
 ├── github_ai_agent/           # Main package
 │   ├── __init__.py
 │   ├── agent.py              # LanGraph ReAct agent implementation
-│   ├── config.py             # Pydantic settings management
-│   ├── github_client.py      # GitHub API integration
-│   └── main.py               # Application orchestration
+│   │                         # - GitHubIssueAgent class (1,152 lines)
+│   │                         # - AgentState and IssueProcessingResult data classes
+│   │                         # - 5 repository management tools
+│   │                         # - Comprehensive error handling and logging
+│   ├── config.py             # Pydantic settings management (120 lines)
+│   │                         # - Environment-based configuration
+│   │                         # - YAML prompt loading and templating
+│   │                         # - Type-safe settings validation
+│   ├── github_client.py      # GitHub API integration (1,000+ lines)
+│   │                         # - Multi-authentication support (tokens, GitHub App)
+│   │                         # - Full CRUD operations for repositories
+│   │                         # - Advanced PR and issue management
+│   ├── logging_utils.py      # Enhanced logging utilities (247 lines)
+│   │                         # - ANSI color coding for different log types
+│   │                         # - Structured logging for debugging
+│   │                         # - Pretty JSON formatting
+│   └── main.py               # Application orchestration (500+ lines)
+│                             # - GitHubAIAgentApp class
+│                             # - Polling and issue detection logic
+│                             # - Daemon and single-run modes
 ├── tests/                    # Test suite
 │   ├── __init__.py
-│   └── test_basic.py
+│   ├── test_basic.py         # Basic functionality tests
+│   ├── test_pr_comments.py   # PR comment processing tests
+│   └── test_prompt_config.py # Configuration and prompt tests
 ├── main.py                   # CLI entry point
+├── prompts.yaml              # YAML configuration for all prompts
 ├── pyproject.toml            # Project configuration & dependencies
 ├── uv.lock                   # Dependency lock file
 ├── .env.example              # Environment template
@@ -480,10 +505,29 @@ GitHub-AI-Agent/
 
 ### Key Files
 
-- **`agent.py`**: Contains the `GitHubIssueAgent` class with ReAct implementation
-- **`github_client.py`**: Handles all GitHub API operations (issues, PRs, files)
+- **`agent.py`**: Contains the `GitHubIssueAgent` class with comprehensive ReAct implementation
+  - Well-documented classes: `AgentState`, `IssueProcessingResult`, `GitHubIssueAgent`
+  - Comprehensive tool management with 5 repository operation tools
+  - Robust error handling and state management
+  - Streaming execution support with fallback to invoke mode
+- **`github_client.py`**: Handles all GitHub API operations (issues, PRs, files, authentication)
+  - Supports multiple authentication methods (Personal tokens, GitHub App)
+  - Comprehensive CRUD operations for repository management
+  - Advanced features like PR comment monitoring and issue processing state tracking
 - **`config.py`**: Pydantic-based configuration with environment variable loading
+  - Type-safe settings management with validation
+  - YAML-based prompt configuration system
+  - Template rendering for system and human messages
 - **`main.py`**: Application entry point with daemon and single-run modes
+  - Comprehensive polling and issue detection logic
+  - Color-coded logging and monitoring
+  - PR follow-up comment processing
+- **`logging_utils.py`**: Enhanced logging utilities with color support
+  - ANSI color codes for different log types
+  - Structured logging for agent actions, LLM interactions, and tool usage
+  - Pretty JSON formatting and timestamps
+- **`prompts.yaml`**: 
+  - System, HumanMessage and tool prompts in an easy to read YAML configuration file.
 
 ## LanGraph Implementation Details
 
@@ -505,14 +549,24 @@ class AgentState(TypedDict):
 ```
 
 ### 3. **Tool Definition**
-The agent uses a single, focused tool:
+The agent uses five comprehensive tools for repository management:
+
 ```python
-Tool(
-    name="create_files_from_request",
-    description="Create files from a JSON array of file objects...",
-    func=create_files_from_request,
-)
+# Repository exploration tools
+Tool(name="list_files_in_repo", description="List files and directories...")
+Tool(name="read_file_from_repo", description="Read file contents...")
+
+# File management tools  
+Tool(name="create_file_in_repo", description="Create new files...")
+Tool(name="edit_file_in_repo", description="Modify existing files...")
+Tool(name="delete_file_in_repo", description="Remove files...")
 ```
+
+Each tool includes:
+- **Pydantic input validation** with structured schemas
+- **Comprehensive error handling** with JSON responses
+- **Contextual commit messages** tied to issue numbers
+- **Branch-aware operations** with proper state management
 
 ### 4. **Error Handling & Streaming**
 - Comprehensive error handling with fallback strategies
@@ -520,34 +574,150 @@ Tool(
 - State logging at each execution step
 
 ### 5. **LLM Integration**
-- Custom `LoggingLLM` wrapper for enhanced request/response logging
-- Configurable models (default: GPT-4)
-- Temperature set to 0.1 for consistent outputs
+- Custom OpenAI integration with enhanced request/response logging
+- Configurable models (default: GPT-4o-mini for cost efficiency)
+- Temperature set to 0.1 for consistent, predictable outputs
+- Comprehensive message handling for different LangChain message types
+
+## Code Quality and Best Practices
+
+### Documentation Standards
+- **Comprehensive Docstrings**: All classes and methods follow Google/Sphinx documentation style
+- **Type Annotations**: Complete type hints throughout the codebase using modern Python typing
+- **Module Documentation**: Each module includes detailed purpose and usage information
+- **Inline Comments**: Strategic commenting for complex logic and business rules
+
+### Architecture Patterns
+- **Separation of Concerns**: Clean module boundaries with specific responsibilities
+- **Configuration Management**: Centralized settings using Pydantic with environment variable support
+- **Error Handling**: Robust exception handling with comprehensive logging
+- **State Management**: Immutable state patterns using TypedDict and LangGraph reducers
+
+### Code Organization
+- **Import Structure**: Well-organized imports following PEP 8 guidelines
+- **Class Design**: Single responsibility principle with clear inheritance patterns
+- **Method Structure**: Logical grouping with clear public/private interfaces
+- **Data Classes**: Proper use of dataclasses and TypedDict for structured data
+
+### Testing and Quality Assurance
+- **Test Coverage**: Basic test suite with mock-based unit tests
+- **Development Tools**: Black, isort, mypy configured for code quality
+- **Type Safety**: MyPy configuration for strict type checking
+- **Modern Python**: Requires Python 3.12+ with modern language features
+
+## Python Best Practices Implementation
+
+### Type Safety and Modern Python Features
+- **Python 3.12+ Requirements**: Leverages modern language features and improved performance
+- **Comprehensive Type Hints**: All functions, methods, and variables include proper type annotations
+- **TypedDict Usage**: Structured data definitions for LangGraph state management
+- **Dataclasses**: Clean data containers with automatic method generation
+- **Optional/Union Types**: Explicit handling of nullable values and type unions
+
+### Error Handling and Robustness
+- **Exception Hierarchy**: Proper exception handling with specific error types
+- **Try-Catch Blocks**: Strategic exception handling around external API calls
+- **Fallback Mechanisms**: Graceful degradation when primary operations fail
+- **Logging Integration**: Comprehensive error logging with context and stack traces
+- **Validation**: Input validation using Pydantic schemas and custom validators
+
+### Configuration and Environment Management
+- **Pydantic Settings**: Type-safe configuration with automatic validation
+- **Environment Variables**: Secure credential management through environment configuration
+- **YAML Configuration**: External configuration files for prompts and templates
+- **Default Values**: Sensible defaults for all configuration options
+- **Configuration Validation**: Early validation of required settings on startup
+
+### Code Organization and Modularity
+- **Single Responsibility**: Each module has a clear, focused purpose
+- **Dependency Injection**: Clean dependency management through constructor injection
+- **Interface Segregation**: Minimal coupling between components
+- **Abstraction Layers**: Clear separation between business logic and external APIs
+- **Factory Patterns**: Tool creation using factory methods for flexibility
+
+### Memory Management and Performance
+- **Lazy Loading**: Repository connections established only when needed
+- **Resource Cleanup**: Proper cleanup of temporary state and resources
+- **Streaming Support**: Memory-efficient processing of large agent conversations
+- **Connection Pooling**: Efficient HTTP connection management through httpx
+- **State Management**: Immutable state patterns for thread safety
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests and linting
-5. Submit a pull request
+### Development Setup
+1. **Clone the repository**: `git clone <repository-url>`
+2. **Install dependencies**: `uv sync` (or `pip install -e .`)
+3. **Copy environment template**: `cp .env.example .env`
+4. **Configure environment variables** in `.env` file
 
-## License
+### Development Workflow
+1. **Create a feature branch**: `git checkout -b feature/your-feature`
+2. **Make your changes** following the established patterns
+3. **Run quality checks**:
+   ```bash
+   uv run black .          # Code formatting
+   uv run isort .          # Import sorting
+   uv run mypy github_ai_agent  # Type checking
+   uv run pytest          # Run tests
+   ```
+4. **Test your changes** thoroughly
+5. **Submit a pull request** with clear description
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+### Code Standards
+- **Follow existing patterns** established in the codebase
+- **Add comprehensive docstrings** for new classes and methods
+- **Include type hints** for all function signatures
+- **Write tests** for new functionality
+- **Update documentation** when adding features
+- **Follow PEP 8** style guidelines (enforced by Black)
+
+## Dependencies and Technology Stack
+
+### Core Dependencies
+- **LangGraph (>=0.2.39)**: State-of-the-art framework for building stateful multi-actor LLM applications
+- **LangChain (>=0.3.7)**: Comprehensive framework for LLM application development
+- **LangChain-OpenAI (>=0.2.8)**: OpenAI integration with structured tool calling support
+- **OpenAI GPT-4o-mini**: Cost-efficient model with excellent reasoning capabilities
+
+### GitHub Integration
+- **PyGithub (>=2.4.0)**: Comprehensive Python wrapper for GitHub REST API v3
+- **PyJWT (>=2.8.0)**: JSON Web Token implementation for GitHub App authentication
+- **Cryptography (>=41.0.0)**: Secure cryptographic operations for key management
+
+### Configuration and Data Management
+- **Pydantic (>=2.9.2)**: Data validation and serialization with type safety
+- **Pydantic-Settings (>=2.6.0)**: Environment-based configuration management
+- **PyYAML**: YAML configuration file parsing for prompts and templates
+- **Python-dotenv (>=1.0.1)**: Environment variable loading from .env files
+
+### Development and Quality Assurance
+- **Black (>=24.10.0)**: Uncompromising code formatter for consistent style
+- **isort (>=5.13.2)**: Import statement organization and sorting
+- **MyPy (>=1.13.0)**: Static type checker for enhanced code reliability
+- **Pytest (>=8.3.3)**: Modern testing framework with extensive plugin ecosystem
 
 ## Debugging and Monitoring
 
 ### Log Output Format
 
-The agent provides color-coded logging for easy monitoring:
+The agent provides comprehensive color-coded logging for easy monitoring:
 
-- **🔵 AGENT**: Agent actions and state changes
-- **🟢 LLM**: LLM requests and responses  
-- **🟣 TOOL**: Tool executions with input/output
-- **🔴 ERROR**: Error conditions and exceptions
-- **🟡 WARNING**: Warning messages
-- **🟦 INFO**: General information
+- **🤖 AGENT**: Agent actions and state changes (cyan)
+- **🧠 LLM**: LLM requests and responses with structured formatting (green)
+- **� TOOL**: Tool executions with input/output details (pink/magenta)
+- **� GITHUB**: GitHub API operations and authentication (orange)
+- **✅ SUCCESS**: Successful operations (bright green)
+- **❌ ERROR**: Error conditions and exceptions (red)
+- **⚠️ WARNING**: Warning messages (orange)
+- **ℹ️ INFO**: General information (light blue)
+
+### Enhanced Logging Features
+
+- **Structured JSON Output**: Pretty-printed JSON for complex data structures
+- **Message Truncation**: Long messages are intelligently truncated for readability
+- **Contextual Icons**: Different icons for different types of operations
+- **Timestamp Precision**: HH:MM:SS format for easy chronological tracking
+- **Visual Separators**: Clean separation between different log sections
 
 ### Debug Mode
 
@@ -562,11 +732,12 @@ uv run python main.py
 ```
 
 Debug mode provides:
-- Complete message history
-- State transitions at each step
-- Tool execution details
-- LLM token usage
-- GitHub API call logs
+- Complete message history with conversation flow
+- State transitions at each step with detailed context
+- Tool execution details including input validation and error handling
+- LLM token usage and response timing
+- GitHub API call logs with request/response details
+- Branch and file operation tracking
 
 ### Monitoring Checklist
 
@@ -582,11 +753,13 @@ For production deployment, monitor:
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| Authentication errors | Invalid GitHub token | Regenerate token with repo permissions |
-| Rate limiting | Too frequent API calls | Increase `POLL_INTERVAL` |
-| OpenAI errors | Invalid API key or quota | Check API key and billing |
-| Branch creation failed | Permission issues | Ensure token has write access to target repo |
-| File creation failed | Path or content issues | Check file paths and content format |
+| Authentication errors | Invalid GitHub token or insufficient permissions | Regenerate token with full repo permissions |
+| Rate limiting | Too frequent API calls or quota exceeded | Increase `POLL_INTERVAL` or check API limits |
+| OpenAI errors | Invalid API key, quota, or model access | Check API key, billing, and model availability |
+| Branch creation failed | Permission issues or branch already exists | Ensure token has write access, check existing branches |
+| File creation failed | Path issues, permission problems, or content errors | Validate file paths, check repository permissions |
+| Tool execution failed | Network issues or API timeouts | Check network connectivity and GitHub status |
+| Agent timeout | Complex reasoning or infinite loops | Adjust `recursion_limit` and `max_iterations` |
 
 ## Target Repository
 
@@ -718,3 +891,7 @@ Fluffy clouds t...
 ────────────────────────────────────────────────────────────────────────────────
 [23:04:33] ℹ️ Single run completed
 ```
+
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
