@@ -533,6 +533,7 @@ class GitHubIssueAgent:
         issue_number: int,
         branch_name: Optional[str] = None,
         draft_pr_number: Optional[int] = None,
+        additional_context: Optional[str] = None,
     ) -> IssueProcessingResult:
         """
         Main workflow for processing a GitHub issue.
@@ -552,6 +553,7 @@ class GitHubIssueAgent:
             issue_number: GitHub issue number to process
             branch_name: Pre-created branch name (if None, assumes one exists)
             draft_pr_number: Pre-created draft PR number (if provided, will be updated to ready)
+            additional_context: Additional context for the agent (e.g., PR comments)
 
         Returns:
             IssueProcessingResult containing success status and relevant metadata
@@ -604,6 +606,7 @@ class GitHubIssueAgent:
                     issue_number=issue.number,
                     issue_title=issue.title,
                     issue_description=issue.body or "No description provided",
+                    additional_context=additional_context,
                 )
             )
 

@@ -91,16 +91,25 @@ def get_human_message_template(
     issue_number: int,
     issue_title: str,
     issue_description: str,
+    additional_context: Optional[str] = None,
 ) -> str:
     """Get the human message template with issue information."""
     prompts = load_prompts()
-    return prompts["human_message_template"].format(
+
+    # Base template content
+    base_message = prompts["human_message_template"].format(
         target_owner=target_owner,
         target_repo=target_repo,
         issue_number=issue_number,
         issue_title=issue_title,
         issue_description=issue_description,
     )
+
+    # Add additional context if provided
+    if additional_context:
+        base_message += f"\n\n**Additional Context:**\n{additional_context}"
+
+    return base_message
 
 
 def get_tool_description(tool_name: str) -> str:

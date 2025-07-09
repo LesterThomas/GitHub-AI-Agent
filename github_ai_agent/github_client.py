@@ -882,3 +882,188 @@ class GitHubClient:
         except GithubException as e:
             log_error(f"Error checking if issue {issue_number} is being processed: {e}")
             return False
+
+    def get_pull_request_comments_since(
+        self, pr_number: int, since_timestamp: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get comments on a pull request since a specific timestamp.
+
+        Args:
+            pr_number: Pull request number
+            since_timestamp: ISO timestamp to get comments since (optional)
+
+        Returns:
+            List of comment dictionaries with metadata
+        """
+        try:
+            pr = self.repo.get_pull(pr_number)
+            if not pr:
+                return []
+
+            # Get all comments on the PR
+            comments = pr.get_issue_comments()
+
+            result = []
+            for comment in comments:
+                comment_data = {
+                    "id": comment.id,
+                    "body": comment.body,
+                    "created_at": comment.created_at,
+                    "updated_at": comment.updated_at,
+                    "author": comment.user.login if comment.user else "Unknown",
+                    "pr_number": pr_number,
+                }
+
+                # If since_timestamp is provided, filter comments
+                if since_timestamp:
+                    from datetime import datetime
+
+                    since_dt = datetime.fromisoformat(
+                        since_timestamp.replace("Z", "+00:00")
+                    )
+                    if comment.created_at <= since_dt:
+                        continue
+
+                result.append(comment_data)
+
+            return result
+
+        except GithubException as e:
+            log_error(f"Error getting comments for PR {pr_number}: {e}")
+            return []
+
+    def find_related_issue_for_pr(self, pr_number: int) -> Optional[int]:
+        """Find the related issue number for a pull request.
+
+        Args:
+            pr_number: Pull request number
+
+        Returns:
+            Related issue number if found, None otherwise
+        """
+        try:
+            pr = self.repo.get_pull(pr_number)
+            if not pr:
+                return None
+
+            # Check PR body for issue references
+            pr_body = pr.body or ""
+
+            # Look for common patterns that reference issues
+            import re
+
+            patterns = [
+                r"#(\d+)",  # Simple #123 pattern
+                r"issue[s]?\s*#(\d+)",  # "issue #123" or "issues #123"
+                r"closes?\s*#(\d+)",  # "closes #123" or "close #123"
+                r"fixes?\s*#(\d+)",  # "fixes #123" or "fix #123"
+                r"resolves?\s*#(\d+)",  # "resolves #123" or "resolve #123"
+                r"related\s*issue:\s*#(\d+)",  # "Related Issue: #123"
+            ]
+
+            for pattern in patterns:
+                matches = re.findall(pattern, pr_body, re.IGNORECASE)
+                if matches:
+                    # Return the first match as an integer
+                    return int(matches[0])
+
+            # Also check PR title for issue references
+            pr_title = pr.title or ""
+            title_patterns = [
+                r"issue[s]?\s*#?(\d+)",  # "Issue 123" or "Issue #123"
+                r"#(\d+)",  # Simple #123 pattern
+            ]
+
+            for pattern in title_patterns:
+                matches = re.findall(pattern, pr_title, re.IGNORECASE)
+                if matches:
+                    return int(matches[0])
+
+            return None
+
+        except GithubException as e:
+            log_error(f"Error finding related issue for PR {pr_number}: {e}")
+            return None
+
+    def get_open_prs_with_recent_comments(
+        self, since_timestamp: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get open PRs that have recent comments.
+
+        Args:
+            since_timestamp: ISO timestamp to get comments since (optional)
+
+        Returns:
+            List of PR data with recent comments and related issue info
+        """
+        try:
+            open_prs = self.get_pull_requests(state="open")
+            prs_with_comments = []
+
+            for pr in open_prs:
+                # Get recent comments for this PR
+                recent_comments = self.get_pull_request_comments_since(
+                    pr.number, since_timestamp
+                )
+
+                if recent_comments:
+                    # Find the related issue
+                    related_issue = self.find_related_issue_for_pr(pr.number)
+
+                    pr_data = {
+                        "pr_number": pr.number,
+                        "title": pr.title,
+                        "body": pr.body,
+                        "related_issue": related_issue,
+                        "recent_comments": recent_comments,
+                    }
+                    prs_with_comments.append(pr_data)
+
+            return prs_with_comments
+
+        except GithubException as e:
+            log_error(f"Error getting open PRs with recent comments: {e}")
+            return []
+
+    def get_current_user_login(self) -> Optional[str]:
+        """Get the current authenticated user's login safely.
+
+        Returns:
+            The current user's login name, or None if it cannot be determined
+        """
+        # Skip the API call entirely since it causes 403 errors with some integrations
+        # We'll rely on pattern-based detection instead
+        return None
+
+    def is_comment_from_ai_agent(self, comment_author: str) -> bool:
+        """Check if a comment is from the AI agent to avoid processing loops.
+
+        Args:
+            comment_author: The username of the comment author
+
+        Returns:
+            True if the comment is likely from an AI agent, False otherwise
+        """
+        author = comment_author.lower()
+
+        # Skip the current user check since get_current_user_login() is disabled
+        # to avoid 403 errors - rely on pattern-based detection instead
+
+        # Check for common AI agent username patterns
+        ai_patterns = [
+            "ai-agent",
+            "test-ai-agent",
+            "bot",
+            "github-actions",
+            "dependabot",
+        ]
+
+        for pattern in ai_patterns:
+            if pattern in author:
+                return True
+
+        # Check for [bot] suffix
+        if author.endswith("[bot]"):
+            return True
+
+        return False

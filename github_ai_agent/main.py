@@ -4,7 +4,7 @@ import asyncio
 import logging
 import sys
 import time
-from typing import Set
+from typing import Set, Optional
 
 from .agent import GitHubIssueAgent
 from .logging_utils import (
@@ -13,6 +13,7 @@ from .logging_utils import (
     log_agent_action,
     log_section_start,
     log_github_action,
+    log_error,
     print_separator,
 )
 from .config import get_settings
@@ -113,6 +114,7 @@ class GitHubAIAgentApp:
         )
 
         self.processed_issues: Set[int] = set()
+        self.last_pr_comment_check: Optional[str] = None
         print_separator()
 
     def poll_and_process_issues(self) -> None:
@@ -174,11 +176,14 @@ class GitHubAIAgentApp:
                 )
             else:
                 log_info("No new issues to process")
+                # Even if no new issues, check for PR follow-up comments
+                self.check_pr_follow_up_comments()
                 return
 
         log_info(f"Discovered {len(new_issues)} unprocessed issues", "NEW_ISSUES")
         print_separator()
 
+        # Process new issues first
         for issue in new_issues:
             try:
                 log_section_start(
@@ -268,6 +273,9 @@ This is a draft pull request that was automatically created when the AI Agent st
                 )
                 print_separator()
 
+        # After processing new issues, check for PR follow-up comments
+        self.check_pr_follow_up_comments()
+
     def run_once(self) -> None:
         """Run the agent once to process current issues."""
         log_section_start("Single Run Mode")
@@ -290,6 +298,166 @@ This is a draft pull request that was automatically created when the AI Agent st
             log_info(f"Daemon error: {e}", "ERROR")
             logger.error(f"Daemon error: {e}", exc_info=True)
             raise
+
+    def check_pr_follow_up_comments(self) -> None:
+        """Check for follow-up comments on open PRs and re-process related issues."""
+        log_section_start("Checking PR Follow-up Comments")
+
+        # Get current timestamp to use for next check
+        from datetime import datetime
+
+        current_time = datetime.utcnow().isoformat() + "Z"
+
+        # Get PRs with recent comments
+        prs_with_comments = self.github_client.get_open_prs_with_recent_comments(
+            since_timestamp=self.last_pr_comment_check
+        )
+
+        if not prs_with_comments:
+            log_info("No follow-up comments found on open PRs", "PR_COMMENTS")
+            self.last_pr_comment_check = current_time
+            return
+
+        log_info(
+            f"Found {len(prs_with_comments)} PRs with recent comments", "PR_COMMENTS"
+        )
+
+        for pr_data in prs_with_comments:
+            pr_number = pr_data["pr_number"]
+            related_issue = pr_data["related_issue"]
+            recent_comments = pr_data["recent_comments"]
+
+            if not related_issue:
+                log_info(
+                    f"PR #{pr_number} has no related issue - skipping",
+                    "PR_COMMENTS",
+                )
+                continue
+
+            # Filter out comments from the AI agent itself to avoid loops
+            user_comments = [
+                comment
+                for comment in recent_comments
+                if not self.github_client.is_comment_from_ai_agent(comment["author"])
+            ]
+
+            if not user_comments:
+                log_info(
+                    f"PR #{pr_number} has no user comments (only AI agent comments) - skipping",
+                    "PR_COMMENTS",
+                )
+                continue
+
+            log_info(
+                f"PR #{pr_number} has {len(user_comments)} new user comments, related to issue #{related_issue}",
+                "PR_COMMENTS",
+            )
+
+            try:
+                # Get the issue to re-process
+                issue = self.github_client.get_issue(related_issue)
+                if not issue:
+                    log_info(
+                        f"Could not find issue #{related_issue} for PR #{pr_number}",
+                        "PR_COMMENTS",
+                    )
+                    continue
+
+                log_section_start(
+                    f"Re-processing Issue #{related_issue} due to PR #{pr_number} comments"
+                )
+
+                # Create a context string with the recent comments
+                comments_context = "\n\n".join(
+                    [
+                        f"**Comment by {comment['author']} on {comment['created_at']}:**\n{comment['body']}"
+                        for comment in user_comments
+                    ]
+                )
+
+                # Get the existing branch for this issue
+                branch_name = f"ai-agent/issue-{related_issue}"
+
+                # Check if branch exists
+                try:
+                    self.github_client.repo.get_branch(branch_name)
+                    branch_exists = True
+                except:
+                    branch_exists = False
+
+                if not branch_exists:
+                    # Create new branch if it doesn't exist
+                    if not self.github_client.create_branch(branch_name):
+                        log_github_action(
+                            f"Failed to create branch for issue #{related_issue}",
+                            "FAILED",
+                        )
+                        continue
+
+                # Add a comment to the issue about re-processing
+                reprocess_comment = f"""🤖 **AI Agent Re-processing Issue**
+
+I noticed new comments on the related pull request #{pr_number} and I'm re-processing this issue to address them.
+
+**New Comments:**
+{comments_context}
+
+I'll update the pull request with any necessary changes."""
+
+                self.github_client.add_comment_to_issue(
+                    related_issue, reprocess_comment
+                )
+
+                # Re-process the issue with the PR comments as context
+                result = self.agent.process_issue(
+                    related_issue,
+                    branch_name,
+                    pr_number,
+                    additional_context=f"Follow-up comments from PR #{pr_number}:\n{comments_context}",
+                )
+
+                if result.success:
+                    log_github_action(
+                        f"Issue #{related_issue} re-processed successfully! Updated PR #{result.pr_number}",
+                        "SUCCESS",
+                    )
+
+                    # Add a comment to the PR about the update
+                    pr_update_comment = f"""🤖 **AI Agent Updated PR**
+
+I've processed the recent comments and updated this pull request accordingly.
+
+**Processed Comments:**
+{comments_context}
+
+Please review the updated changes."""
+
+                    # Add comment to PR
+                    try:
+                        pr = self.github_client.repo.get_pull(pr_number)
+                        pr.create_issue_comment(pr_update_comment)
+                        log_github_action(
+                            f"Added update comment to PR #{pr_number}",
+                            "PR_UPDATE",
+                        )
+                    except Exception as e:
+                        log_error(f"Failed to add comment to PR #{pr_number}: {e}")
+
+                else:
+                    log_github_action(
+                        f"Re-processing failed for issue #{related_issue}: {result.error_message}",
+                        "FAILED",
+                    )
+
+            except Exception as e:
+                log_github_action(
+                    f"Unexpected error re-processing issue #{related_issue}: {e}",
+                    "ERROR",
+                )
+
+        # Update the timestamp for next check
+        self.last_pr_comment_check = current_time
+        print_separator()
 
 
 def main() -> None:
