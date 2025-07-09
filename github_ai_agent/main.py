@@ -348,8 +348,40 @@ This is a draft pull request that was automatically created when the AI Agent st
                 )
                 continue
 
+            # Filter out user comments that have already been addressed by the AI Agent
+            # A user comment is considered "addressed" if there's an AI agent comment after it
+            unaddressed_user_comments = []
+
+            # Sort all comments by creation time to establish chronological order
+            all_comments_sorted = sorted(recent_comments, key=lambda x: x["created_at"])
+
+            for user_comment in user_comments:
+                # Check if there's an AI agent comment after this user comment
+                has_ai_response = False
+
+                for comment in all_comments_sorted:
+                    # If this comment is after the user comment and is from AI agent
+                    if comment["created_at"] > user_comment[
+                        "created_at"
+                    ] and self.github_client.is_comment_from_ai_agent(
+                        comment["author"]
+                    ):
+                        has_ai_response = True
+                        break
+
+                # If no AI response found after this user comment, it's unaddressed
+                if not has_ai_response:
+                    unaddressed_user_comments.append(user_comment)
+
+            if not unaddressed_user_comments:
+                log_info(
+                    f"PR #{pr_number} has no unaddressed user comments (all have AI agent responses) - skipping",
+                    "PR_COMMENTS",
+                )
+                continue
+
             log_info(
-                f"PR #{pr_number} has {len(user_comments)} new user comments, related to issue #{related_issue}",
+                f"PR #{pr_number} has {len(unaddressed_user_comments)} unaddressed user comments (out of {len(user_comments)} total), related to issue #{related_issue}",
                 "PR_COMMENTS",
             )
 
@@ -367,11 +399,11 @@ This is a draft pull request that was automatically created when the AI Agent st
                     f"Re-processing Issue #{related_issue} due to PR #{pr_number} comments"
                 )
 
-                # Create a context string with the recent comments
+                # Create a context string with the unaddressed comments
                 comments_context = "\n\n".join(
                     [
                         f"**Comment by {comment['author']} on {comment['created_at']}:**\n{comment['body']}"
-                        for comment in user_comments
+                        for comment in unaddressed_user_comments
                     ]
                 )
 
@@ -397,9 +429,9 @@ This is a draft pull request that was automatically created when the AI Agent st
                 # Add a comment to the issue about re-processing
                 reprocess_comment = f"""🤖 **AI Agent Re-processing Issue**
 
-I noticed new comments on the related pull request #{pr_number} and I'm re-processing this issue to address them.
+I noticed new unaddressed comments on the related pull request #{pr_number} and I'm re-processing this issue to address them.
 
-**New Comments:**
+**Unaddressed Comments:**
 {comments_context}
 
 I'll update the pull request with any necessary changes."""
@@ -425,7 +457,7 @@ I'll update the pull request with any necessary changes."""
                     # Add a comment to the PR about the update
                     pr_update_comment = f"""🤖 **AI Agent Updated PR**
 
-I've processed the recent comments and updated this pull request accordingly.
+I've processed the recent unaddressed comments and updated this pull request accordingly.
 
 **Processed Comments:**
 {comments_context}
