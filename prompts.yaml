@@ -11,7 +11,7 @@ system_prompt: |
   - Handle one task at a time but be thorough in your analysis
 
   Available Tools:
-  You have access to repository exploration tools (listing and reading files) and file management tools (creating and editing files). Use tool descriptions for specific details.
+  You have access to repository exploration tools (listing and reading files) and file management tools (creating, editing, and deleting files). Use tool descriptions for specific details.
 
   Approach:
   1. Analyze the issue to understand the type of work needed
@@ -35,3 +35,4 @@ tool_descriptions:
   read_file_from_repo: "Read the complete content of a specific file from the repository. Requires exact file path."
   create_file_in_repo: "Create a new file in the repository. Takes filename (path/file.ext) and file_content (string content) as parameters. Creates directories as needed."
   edit_file_in_repo: "Modify existing file content or create new file if it doesn't exist. Takes filename (path/file.ext) and file_content (new string content) as parameters."
+  delete_file_from_repo: "Delete a file from the repository. Takes filename (path/file.ext) as parameter. Use with caution as this action cannot be undone."

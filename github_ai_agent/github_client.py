@@ -591,6 +591,41 @@ class GitHubClient:
             )
             return False
 
+    def delete_file(self, path: str, message: str, branch: str = "main") -> bool:
+        """Delete a file from the repository.
+
+        Args:
+            path: File path in the repository to delete
+            message: Commit message for the deletion
+            branch: Branch to delete the file from
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            log_github_action(
+                f"Deleting file '{path}' from {self.target_owner}/{self.target_repo} on branch '{branch}'"
+            )
+            # Get the file to obtain its SHA (required for deletion)
+            file_obj = self.repo.get_contents(path, ref=branch)
+
+            # Delete the file
+            self.repo.delete_file(
+                path=path,
+                message=message,
+                sha=file_obj.sha,
+                branch=branch,
+            )
+            log_github_action(
+                f"Deleted file '{path}' from {self.target_owner}/{self.target_repo}"
+            )
+            return True
+        except GithubException as e:
+            log_error(
+                f"Error deleting file '{path}' from {self.target_owner}/{self.target_repo}: {e}"
+            )
+            return False
+
     def add_comment_to_issue(self, issue_number: int, comment: str) -> bool:
         """Add a comment to an issue.
 

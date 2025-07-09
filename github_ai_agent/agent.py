@@ -228,6 +228,9 @@ class GitHubIssueAgent:
         class ReadFileInput(BaseModel):
             filename: str = Field(description="Path/name of the file to read")
 
+        class DeleteFileInput(BaseModel):
+            filename: str = Field(description="Path/name of the file to delete")
+
         def create_file_in_repo(filename: str, file_content: str) -> str:
             """
             Core tool for creating a single file in the GitHub repository.
@@ -496,6 +499,75 @@ class GitHubIssueAgent:
                     }
                 )
 
+        def delete_file_from_repo(filename: str) -> str:
+            """Delete a file from the repository."""
+            import json
+
+            log_tool_usage("delete_file_from_repo", f"filename='{filename}'")
+
+            try:
+                # Validate required fields
+                if not filename:
+                    error_msg = "Missing filename parameter"
+                    log_error(error_msg)
+                    return json.dumps(
+                        {"success": False, "error": error_msg, "file_deleted": None}
+                    )
+
+                # Retrieve the current branch context
+                current_branch = getattr(self, "_current_branch", None)
+                if not current_branch:
+                    error_msg = "No branch available for deleting file"
+                    log_error(error_msg, "ACTION")
+                    return json.dumps({"success": False, "error": error_msg})
+
+                # Generate contextual commit message
+                current_issue_number = getattr(self, "_current_issue_number", "unknown")
+                commit_message = (
+                    f"Delete {filename} as requested in issue #{current_issue_number}"
+                )
+
+                # Attempt file deletion via GitHub API
+                if self.github_client.delete_file(
+                    path=filename,
+                    message=commit_message,
+                    branch=current_branch,
+                ):
+                    log_agent_action(f"Successfully deleted file: {filename}")
+                    result = {
+                        "success": True,
+                        "file_deleted": filename,
+                        "branch": current_branch,
+                    }
+                else:
+                    error_msg = f"Failed to delete file: {filename} from repository"
+                    log_error(error_msg, "FILE_ERROR")
+                    result = {
+                        "success": False,
+                        "error": error_msg,
+                        "file_deleted": None,
+                    }
+
+                result_json = json.dumps(result, indent=2)
+                log_tool_usage(
+                    "delete_file_from_repo",
+                    f"File deletion result: {result['success']}",
+                )
+                return result_json
+
+            except Exception as e:
+                error_msg = f"Error deleting file: {e}"
+                log_tool_usage("delete_file_from_repo", error_msg, "ERROR")
+                current_branch = getattr(self, "_current_branch", "unknown")
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": error_msg,
+                        "filename": filename,
+                        "branch": current_branch,
+                    }
+                )
+
         # Return the configured tools list using StructuredTool
         return [
             StructuredTool(
@@ -521,6 +593,12 @@ class GitHubIssueAgent:
                 description=get_tool_description("edit_file_in_repo"),
                 func=edit_file_in_repo,
                 args_schema=EditFileInput,
+            ),
+            StructuredTool(
+                name="delete_file_from_repo",
+                description=get_tool_description("delete_file_from_repo"),
+                func=delete_file_from_repo,
+                args_schema=DeleteFileInput,
             ),
         ]
 
