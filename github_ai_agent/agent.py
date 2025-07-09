@@ -529,7 +529,10 @@ class GitHubIssueAgent:
     # ========================================================================
 
     def process_issue(
-        self, issue_number: int, branch_name: Optional[str] = None
+        self,
+        issue_number: int,
+        branch_name: Optional[str] = None,
+        draft_pr_number: Optional[int] = None,
     ) -> IssueProcessingResult:
         """
         Main workflow for processing a GitHub issue.
@@ -548,6 +551,7 @@ class GitHubIssueAgent:
         Args:
             issue_number: GitHub issue number to process
             branch_name: Pre-created branch name (if None, assumes one exists)
+            draft_pr_number: Pre-created draft PR number (if provided, will be updated to ready)
 
         Returns:
             IssueProcessingResult containing success status and relevant metadata
@@ -645,7 +649,7 @@ class GitHubIssueAgent:
             # STEP 6: Process Results
             # ================================================================
             return self._process_agent_results(
-                final_state, issue, branch_name, issue_number
+                final_state, issue, branch_name, issue_number, draft_pr_number
             )
 
         except Exception as e:
@@ -725,6 +729,7 @@ class GitHubIssueAgent:
         issue: Any,
         branch_name: Optional[str],
         issue_number: int,
+        draft_pr_number: Optional[int] = None,
     ) -> IssueProcessingResult:
         """
         Process the agent's execution results and create pull requests.
@@ -741,6 +746,7 @@ class GitHubIssueAgent:
             issue: GitHub issue object
             branch_name: Git branch name
             issue_number: GitHub issue number
+            draft_pr_number: Pre-created draft PR number (if provided, will be updated to ready)
 
         Returns:
             IssueProcessingResult with success status and PR details
@@ -807,7 +813,12 @@ class GitHubIssueAgent:
         # ================================================================
         if files_created:
             return self._create_pull_request(
-                files_created, issue, branch_name, generated_content, issue_number
+                files_created,
+                issue,
+                branch_name,
+                generated_content,
+                issue_number,
+                draft_pr_number,
             )
         else:
             log_error("No files were created in SAAA repository")
@@ -878,11 +889,12 @@ class GitHubIssueAgent:
         branch_name: Optional[str],
         generated_content: str,
         issue_number: int,
+        draft_pr_number: Optional[int] = None,
     ) -> IssueProcessingResult:
         """
-        Create a pull request with the generated files.
+        Create or update a pull request with the generated files.
 
-        This method creates a comprehensive pull request that includes:
+        This method either creates a new pull request or updates an existing draft PR that includes:
         - Descriptive title and body
         - List of created files
         - Link to original issue
@@ -894,6 +906,7 @@ class GitHubIssueAgent:
             branch_name: Git branch name
             generated_content: Agent's generated response
             issue_number: GitHub issue number
+            draft_pr_number: Pre-created draft PR number (if provided, will be updated to ready)
 
         Returns:
             IssueProcessingResult with success status and PR details
@@ -933,45 +946,58 @@ Closes #{issue.number}
 *This PR was created by the GitHub AI Agent to resolve the issue by creating the requested files in the SAAA repository.*
 """
 
-        # Create the pull request
-        log_agent_action(
-            f"Creating pull request to SAAA repository: {pr_title}",
-            "PR_CREATE",
-        )
+        # Update existing draft PR or create new one
+        if draft_pr_number:
+            log_agent_action(
+                f"Updating draft PR #{draft_pr_number} to ready state: {pr_title}",
+                "PR_UPDATE",
+            )
 
-        pr = self.github_client.create_pull_request(
-            title=pr_title,
-            body=pr_body,
-            head=branch_name,
-            base="main",
-            draft=False,
-        )
+            pr = self.github_client.update_pull_request(
+                pr_number=draft_pr_number, title=pr_title, body=pr_body, draft=False
+            )
+        else:
+            log_agent_action(
+                f"Creating pull request to SAAA repository: {pr_title}",
+                "PR_CREATE",
+            )
+
+            pr = self.github_client.create_pull_request(
+                title=pr_title,
+                body=pr_body,
+                head=branch_name,
+                base="main",
+                draft=False,
+            )
 
         if pr:
+            action_type = "updated" if draft_pr_number else "created"
             log_agent_action(
-                f"Successfully created pull request #{pr.number} in SAAA repository"
+                f"Successfully {action_type} pull request #{pr.number} in SAAA repository"
             )
             log_agent_action(f"Pull request URL: {pr.html_url}")
 
             # Add comment to the original issue
-            log_agent_action(f"Adding comment to issue #{issue.number}", "COMMENT")
-            self.github_client.add_comment_to_issue(
-                issue.number,
-                f"I've created a pull request #{pr.number} in the SAAA repository with the generated content. Please review and merge if satisfactory.\n\nPull request: {pr.html_url}",
+            log_agent_action(
+                f"Adding completion comment to issue #{issue.number}", "COMMENT"
             )
+            completion_comment = f"🎉 **Processing Complete!**\n\nI've successfully processed this issue and {'updated the pull request' if draft_pr_number else 'created a pull request'} #{pr.number} in the SAAA repository with the generated content.\n\n📋 **Pull Request**: {pr.html_url}\n📁 **Files Created**: {', '.join(files_created)}\n\nThe pull request is now ready for review. Please review and merge if satisfactory!"
+
+            self.github_client.add_comment_to_issue(issue.number, completion_comment)
 
             log_agent_action(
-                f"Issue #{issue_number} processed successfully - created PR in SAAA repository",
+                f"Issue #{issue_number} processed successfully - {'updated' if draft_pr_number else 'created'} PR in SAAA repository",
                 "SUCCESS",
             )
             return IssueProcessingResult(
                 success=True, pr_number=pr.number, branch_name=branch_name
             )
         else:
-            log_error("Failed to create pull request in SAAA repository")
+            error_msg = f"Failed to {'update' if draft_pr_number else 'create'} pull request in SAAA repository"
+            log_error(error_msg)
             return IssueProcessingResult(
                 success=False,
-                error_message="Failed to create pull request in SAAA repository",
+                error_message=error_msg,
             )
 
     # ========================================================================

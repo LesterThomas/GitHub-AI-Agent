@@ -372,6 +372,133 @@ class GitHubClient:
             )
             return None
 
+    def update_pull_request(
+        self,
+        pr_number: int,
+        title: Optional[str] = None,
+        body: Optional[str] = None,
+        draft: Optional[bool] = None,
+    ) -> Optional[PullRequest]:
+        """Update a pull request.
+
+        Args:
+            pr_number: Pull request number
+            title: New title (optional)
+            body: New body (optional)
+            draft: Whether to set as draft (optional)
+
+        Returns:
+            PullRequest object or None if update failed
+        """
+        try:
+            pr = self.repo.get_pull(pr_number)
+
+            # Prepare update parameters for basic fields
+            update_params = {}
+            if title is not None:
+                update_params["title"] = title
+            if body is not None:
+                update_params["body"] = body
+
+            # Update basic fields if any
+            if update_params:
+                pr.edit(**update_params)
+                log_github_action(f"Updated pull request #{pr_number} basic fields")
+
+            # Handle draft state separately using GitHub API
+            if draft is not None:
+                try:
+                    # Use direct requests to update draft state since PyGithub doesn't support it well
+                    import requests
+
+                    # Get the auth header from the existing github client - try multiple approaches
+                    auth_header = None
+                    try:
+                        # Try the common attribute name
+                        auth_header = (
+                            self.github._Github__requester._Requester__authorizationHeader
+                        )
+                    except AttributeError:
+                        try:
+                            # Try alternative attribute name
+                            auth_header = (
+                                self.github._Github__requester._authorizationHeader
+                            )
+                        except AttributeError:
+                            try:
+                                # Try accessing the token directly
+                                token = (
+                                    self.github._Github__requester._Requester__auth.token
+                                )
+                                auth_header = f"token {token}"
+                            except AttributeError:
+                                try:
+                                    # Last resort - try to get auth from the requester
+                                    requester = self.github._Github__requester
+                                    if hasattr(requester, "_auth") and hasattr(
+                                        requester._auth, "token"
+                                    ):
+                                        auth_header = f"token {requester._auth.token}"
+                                    else:
+                                        # If we can't get the token, skip draft update
+                                        log_error(
+                                            f"Cannot access GitHub auth token for draft update on PR #{pr_number}"
+                                        )
+                                        raise Exception(
+                                            "Cannot access GitHub auth token"
+                                        )
+                                except AttributeError:
+                                    # Final fallback - skip draft update
+                                    log_error(
+                                        f"Cannot access GitHub auth token for draft update on PR #{pr_number}"
+                                    )
+                                    raise Exception("Cannot access GitHub auth token")
+
+                    if auth_header:
+                        # Update draft state via REST API
+                        headers = {
+                            "Authorization": auth_header,
+                            "Accept": "application/vnd.github.v3+json",
+                            "Content-Type": "application/json",
+                        }
+
+                        data = {"draft": draft}
+
+                        response = requests.patch(
+                            f"https://api.github.com/repos/{self.target_owner}/{self.target_repo}/pulls/{pr_number}",
+                            headers=headers,
+                            json=data,
+                        )
+
+                        if response.status_code == 200:
+                            if draft is False:
+                                log_github_action(
+                                    f"Pull request #{pr_number} marked as ready for review"
+                                )
+                            elif draft is True:
+                                log_github_action(
+                                    f"Pull request #{pr_number} marked as draft"
+                                )
+                        else:
+                            log_error(
+                                f"Failed to update draft state for PR #{pr_number}: {response.status_code} {response.text}"
+                            )
+
+                except Exception as draft_error:
+                    log_error(
+                        f"Error updating draft state for PR #{pr_number}: {draft_error}"
+                    )
+                    # Don't fail the entire operation, just log the error
+
+            # Refresh the PR object to get updated state
+            pr = self.repo.get_pull(pr_number)
+            log_github_action(f"Successfully updated pull request #{pr_number}")
+            return pr
+
+        except GithubException as e:
+            log_error(f"Error updating pull request {pr_number}: {e}")
+            return None
+
     def create_branch(self, branch_name: str, from_branch: str = "main") -> bool:
         """Create a new branch in the SAAA repository.
 
@@ -404,6 +531,12 @@ class GitHubClient:
             log_github_action(
                 f"Successfully created branch '{branch_name}' in {self.target_owner}/{self.target_repo}"
             )
+
+            # Create an empty commit to mark the beginning of AI Agent work
+            if not self.create_empty_commit(branch_name, "AI Agent WIP"):
+                log_error(f"Failed to create empty commit on branch '{branch_name}'")
+                # Don't fail the entire operation, just log the error
+
             return True
         except GithubException as e:
             log_error(
@@ -668,3 +801,43 @@ class GitHubClient:
                 f"Error reading file '{file_path}' from {self.target_owner}/{self.target_repo}: {e}"
             )
             return None
+
+    def create_empty_commit(self, branch_name: str, message: str) -> bool:
+        """Create an empty commit on a branch.
+
+        Args:
+            branch_name: Name of the branch to commit to
+            message: Commit message
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            log_github_action(
+                f"Creating empty commit on branch '{branch_name}' in {self.target_owner}/{self.target_repo}"
+            )
+
+            # Get the current branch reference
+            branch_ref = self.repo.get_git_ref(f"heads/{branch_name}")
+
+            # Get the current commit
+            current_commit = self.repo.get_git_commit(branch_ref.object.sha)
+
+            # Create a new commit with the same tree (empty commit)
+            new_commit = self.repo.create_git_commit(
+                message=message,
+                tree=current_commit.tree,
+                parents=[current_commit],
+            )
+
+            # Update the branch reference to point to the new commit
+            branch_ref.edit(sha=new_commit.sha)
+
+            log_github_action(
+                f"Successfully created empty commit on branch '{branch_name}': {message}"
+            )
+            return True
+
+        except GithubException as e:
+            log_error(f"Error creating empty commit on branch '{branch_name}': {e}")
+            return False

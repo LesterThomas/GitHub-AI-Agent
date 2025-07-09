@@ -167,24 +167,73 @@ class GitHubAIAgentApp:
 
                 # Create branch immediately after detecting new issue
                 branch_name = f"ai-agent/issue-{issue.number}"
-                log_github_action(f"Creating branch '{branch_name}'", "BRANCH_CREATE")
 
                 if self.github_client.create_branch(branch_name):
-                    log_github_action(f"Branch '{branch_name}' created successfully")
+                    # Create draft PR immediately after branch creation
+                    draft_pr_title = (
+                        f"[DRAFT] Processing Issue #{issue.number}: {issue.title}"
+                    )
+                    draft_pr_body = f"""🤖 **AI Agent is processing this issue**
 
-                    # Now process the issue with the pre-created branch
-                    result = self.agent.process_issue(issue.number, branch_name)
+This is a draft pull request that was automatically created when the AI Agent started processing issue #{issue.number}.
 
-                    if result.success:
+## Issue Details
+**Title**: {issue.title}
+**Status**: 🔄 In Progress
+
+## Progress
+- ✅ Branch created: `{branch_name}`
+- ✅ Draft PR created  
+- 🔄 AI Agent processing...
+- ⏳ Waiting for completion...
+
+---
+*This PR will be updated automatically when the AI Agent completes processing the issue.*
+
+**Related Issue**: #{issue.number}
+"""
+
+                    draft_pr = self.github_client.create_pull_request(
+                        title=draft_pr_title,
+                        body=draft_pr_body,
+                        head=branch_name,
+                        base="main",
+                        draft=True,
+                    )
+
+                    if draft_pr:
                         log_github_action(
-                            f"Issue completed! Created PR #{result.pr_number}",
-                            "SUCCESS",
+                            f"Created draft PR #{draft_pr.number}", "DRAFT_PR"
                         )
-                        self.processed_issues.add(issue.number)
+
+                        # Comment on the issue about the draft PR
+                        draft_comment = f"🤖 **AI Agent Started Processing**\n\nI've started processing this issue and created a draft pull request to track progress:\n\n📋 **Draft PR**: #{draft_pr.number}\n🌿 **Branch**: `{branch_name}`\n\nI'll update you when the processing is complete!"
+
+                        self.github_client.add_comment_to_issue(
+                            issue.number, draft_comment
+                        )
+
+                        # Now process the issue with the pre-created branch and draft PR
+                        result = self.agent.process_issue(
+                            issue.number, branch_name, draft_pr.number
+                        )
+
+                        if result.success:
+                            log_github_action(
+                                f"Issue completed! Updated PR #{result.pr_number} to ready",
+                                "SUCCESS",
+                            )
+                            self.processed_issues.add(issue.number)
+                        else:
+                            log_github_action(
+                                f"Processing failed: {result.error_message}", "FAILED"
+                            )
                     else:
                         log_github_action(
-                            f"Processing failed: {result.error_message}", "FAILED"
+                            f"Draft PR creation failed for issue #{issue.number}",
+                            "FAILED",
                         )
+                        continue
                 else:
                     log_github_action(
                         f"Branch creation failed for issue #{issue.number}", "FAILED"
