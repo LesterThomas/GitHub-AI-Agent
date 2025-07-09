@@ -1,6 +1,5 @@
 """Main application for the GitHub AI Agent."""
 
-import asyncio
 import logging
 import sys
 import time
@@ -10,7 +9,6 @@ from .agent import GitHubIssueAgent
 from .logging_utils import (
     Colors,
     log_info,
-    log_agent_action,
     log_section_start,
     log_github_action,
     log_error,
@@ -176,8 +174,7 @@ class GitHubAIAgentApp:
                 )
             else:
                 log_info("No new issues to process")
-                # Even if no new issues, check for PR follow-up comments
-                self.check_pr_follow_up_comments()
+
                 return
 
         log_info(f"Discovered {len(new_issues)} unprocessed issues", "NEW_ISSUES")
@@ -273,13 +270,11 @@ This is a draft pull request that was automatically created when the AI Agent st
                 )
                 print_separator()
 
-        # After processing new issues, check for PR follow-up comments
-        self.check_pr_follow_up_comments()
-
     def run_once(self) -> None:
         """Run the agent once to process current issues."""
         log_section_start("Single Run Mode")
         self.poll_and_process_issues()
+        self.check_pr_follow_up_comments()
         log_info("Single run completed", "COMPLETE")
 
     def run_daemon(self) -> None:
@@ -289,6 +284,7 @@ This is a draft pull request that was automatically created when the AI Agent st
         try:
             while True:
                 self.poll_and_process_issues()
+                self.check_pr_follow_up_comments()
                 log_info(f"Sleeping for {self.settings.poll_interval} seconds...")
                 time.sleep(self.settings.poll_interval)
 
