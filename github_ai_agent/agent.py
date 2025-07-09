@@ -26,6 +26,7 @@ from langgraph.prebuilt import create_react_agent
 
 from .github_client import GitHubClient
 from .config import get_system_prompt, get_human_message_template, get_tool_description
+from .mcp_client import MCPClient
 from .logging_utils import (
     Colors,
     log_agent_action,
@@ -133,6 +134,8 @@ class GitHubIssueAgent:
         model: str = "gpt-4o-mini",
         max_iterations: int = 5,
         recursion_limit: int = 10,
+        mcp_config_file: str = "mcp_config.json",
+        enable_mcp: bool = True,
     ):
         """
         Initialize the GitHub Issue Agent.
@@ -140,6 +143,7 @@ class GitHubIssueAgent:
         Sets up the LangGraph ReAct agent with necessary components:
         - OpenAI language model for reasoning
         - Custom tools for GitHub operations
+        - MCP client for external tool integration
         - Memory checkpointer for conversation history
         - Configuration for execution limits
 
@@ -149,11 +153,24 @@ class GitHubIssueAgent:
             model: OpenAI model name (default: gpt-4o-mini for cost efficiency)
             max_iterations: Maximum iterations for agent reasoning (safety limit)
             recursion_limit: LangGraph recursion limit to prevent infinite loops
+            mcp_config_file: Path to MCP configuration file
+            enable_mcp: Whether to enable MCP client functionality
         """
         # Store configuration
         self.github_client = github_client
         self.max_iterations = max_iterations
         self.recursion_limit = recursion_limit
+        self.enable_mcp = enable_mcp
+
+        # Initialize MCP client if enabled
+        self.mcp_client = None
+        if enable_mcp:
+            try:
+                self.mcp_client = MCPClient(mcp_config_file)
+                log_agent_action("MCP client initialized", "MCP_INIT")
+            except Exception as e:
+                log_error(f"Failed to initialize MCP client: {e}", "MCP_ERROR")
+                self.enable_mcp = False
 
         # Initialize the language model with low temperature for consistent outputs
         base_llm = ChatOpenAI(
@@ -167,14 +184,15 @@ class GitHubIssueAgent:
         log_agent_action("Initializing GitHub Issue Agent", "INIT")
         log_agent_action(f"Model: {model}, Max iterations: {max_iterations}")
         log_agent_action(f"Recursion limit: {recursion_limit}")
+        log_agent_action(f"MCP enabled: {self.enable_mcp}")
         log_agent_action(
             f"Target SAAA repository: {github_client.target_owner}/{github_client.target_repo}"
         )
 
-        # Create custom tools for GitHub operations
+        # Create custom tools for GitHub operations and MCP tools
         self.tools = self._create_tools()
         log_agent_action(
-            f"Created {len(self.tools)} tools: {[tool.name for tool in self.tools]}",
+            f"Created {len(self.tools)} total tools: {[tool.name for tool in self.tools]}",
             "TOOLS",
         )
 
@@ -569,7 +587,7 @@ class GitHubIssueAgent:
                 )
 
         # Return the configured tools list using StructuredTool
-        return [
+        github_tools = [
             StructuredTool(
                 name="create_file_in_repo",
                 description=get_tool_description("create_file_in_repo"),
@@ -601,6 +619,24 @@ class GitHubIssueAgent:
                 args_schema=DeleteFileInput,
             ),
         ]
+
+        # Add MCP tools if enabled
+        mcp_tools = []
+        if self.enable_mcp and self.mcp_client:
+            try:
+                mcp_tools = self.mcp_client.initialize()
+                log_agent_action(f"Loaded {len(mcp_tools)} MCP tools", "MCP_TOOLS")
+            except Exception as e:
+                log_error(f"Failed to load MCP tools: {e}", "MCP_ERROR")
+
+        # Combine GitHub tools and MCP tools
+        all_tools = github_tools + mcp_tools
+        log_agent_action(
+            f"Total tools available: {len(github_tools)} GitHub + {len(mcp_tools)} MCP = {len(all_tools)}",
+            "TOOLS_SUMMARY",
+        )
+
+        return all_tools
 
     # ========================================================================
     # ISSUE PROCESSING WORKFLOW
@@ -1149,3 +1185,17 @@ Closes #{issue.number}
 
         log_agent_action(f"File description for {filename}: {description}")
         return description
+
+    def cleanup(self) -> None:
+        """
+        Clean up resources and shut down MCP servers.
+
+        This method should be called when the agent is no longer needed
+        to properly clean up MCP server processes and other resources.
+        """
+        if self.enable_mcp and self.mcp_client:
+            try:
+                self.mcp_client.cleanup()
+                log_agent_action("MCP client cleaned up", "MCP_CLEANUP")
+            except Exception as e:
+                log_error(f"Error during MCP cleanup: {e}", "MCP_ERROR")

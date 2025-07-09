@@ -109,6 +109,8 @@ class GitHubAIAgentApp:
             model=self.settings.openai_model,
             max_iterations=self.settings.max_iterations,
             recursion_limit=self.settings.recursion_limit,
+            mcp_config_file="mcp_config.json",
+            enable_mcp=True,
         )
 
         self.processed_issues: Set[int] = set()
@@ -487,6 +489,12 @@ Please review the updated changes."""
         self.last_pr_comment_check = current_time
         print_separator()
 
+    def cleanup(self) -> None:
+        """Clean up application resources."""
+        log_info("Cleaning up application resources", "CLEANUP")
+        if hasattr(self, "agent") and self.agent:
+            self.agent.cleanup()
+
 
 def main() -> None:
     """Main entry point."""
@@ -505,11 +513,15 @@ def main() -> None:
 
     app = GitHubAIAgentApp()
 
-    # Check command line arguments
-    if len(sys.argv) > 1 and sys.argv[1] == "--daemon":
-        app.run_daemon()
-    else:
-        app.run_once()
+    try:
+        # Check command line arguments
+        if len(sys.argv) > 1 and sys.argv[1] == "--daemon":
+            app.run_daemon()
+        else:
+            app.run_once()
+    finally:
+        # Clean up MCP resources
+        app.cleanup()
 
 
 if __name__ == "__main__":

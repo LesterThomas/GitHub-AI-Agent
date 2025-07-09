@@ -46,6 +46,12 @@ The agent follows LanGraph best practices and consists of:
    # Edit .env with your actual API keys and settings
    ```
 
+4. **Configure MCP servers** (optional):
+   ```bash
+   cp mcp_config.example.json mcp_config.json
+   # Edit mcp_config.json to configure your MCP servers
+   ```
+
 ## Configuration
 
 Create a `.env` file with the following variables:
@@ -205,7 +211,7 @@ The agent operates across two repositories:
 1. **Issue Detection**: Continuously polls the source repository for issues labeled "AI Agent"
 2. **Branch Creation**: Immediately creates a feature branch in the SAAA repository
 3. **Content Analysis**: The LanGraph ReAct agent analyzes the issue using the system prompt
-4. **File Creation**: Agent uses the `create_files_from_request` tool to create files directly in GitHub
+4. **File Operations**: Agent uses repository tools and MCP tools to create/modify files directly in GitHub
 5. **Commit & Branch**: Files are committed directly to the pre-created feature branch
 6. **Pull Request**: Opens a PR in SAAA repository linking back to the original issue
 7. **Issue Update**: Comments on the original issue with the PR link
@@ -424,12 +430,14 @@ The agent follows this detailed workflow from GitHub issue polling to PR creatio
 - **LLM Model**: GPT-4o-mini (configurable via `OPENAI_MODEL`)
 - **ReAct Pattern**: Uses LanGraph's built-in ReAct agent with MemorySaver checkpointing
 - **Reasoning**: Analyzes issue requirements and plans file operations
-- **Multiple Tools**: 5 comprehensive tools for repository management:
+- **Repository Tools**: 5 comprehensive tools for repository management:
   - `create_file_in_repo`: Create new files in the target repository
   - `edit_file_in_repo`: Modify existing files
   - `read_file_from_repo`: Read file contents for context
   - `list_files_in_repo`: Explore repository structure
   - `delete_file_from_repo`: Remove files when needed
+- **MCP Tools**: Additional tools from configured MCP servers (filesystem, GitHub, etc.)
+- **Tool Integration**: MCP tools are seamlessly integrated alongside repository tools
 - **Direct Creation**: Files are created immediately in GitHub with proper commit messages
 
 #### 7-8. Status Check & Pull Request Creation
@@ -473,6 +481,12 @@ GitHub-AI-Agent/
 │   │                         # - AgentState and IssueProcessingResult data classes
 │   │                         # - 5 repository management tools
 │   │                         # - Comprehensive error handling and logging
+│   │                         # - MCP client integration for external tools
+│   ├── mcp_client.py         # MCP client implementation (580+ lines)
+│   │                         # - MCPClient, MCPServerConfig, MCPTool classes
+│   │                         # - MCP server process management
+│   │                         # - Tool discovery and LangChain integration
+│   │                         # - Mock implementations for filesystem/GitHub servers
 │   ├── config.py             # Pydantic settings management (120 lines)
 │   │                         # - Environment-based configuration
 │   │                         # - YAML prompt loading and templating
@@ -492,10 +506,13 @@ GitHub-AI-Agent/
 ├── tests/                    # Test suite
 │   ├── __init__.py
 │   ├── test_basic.py         # Basic functionality tests
+│   ├── test_mcp_client.py    # MCP client functionality tests
 │   ├── test_pr_comments.py   # PR comment processing tests
 │   └── test_prompt_config.py # Configuration and prompt tests
 ├── main.py                   # CLI entry point
 ├── prompts.yaml              # YAML configuration for all prompts
+├── mcp_config.json           # MCP server configuration (user-created)
+├── mcp_config.example.json   # Example MCP configuration
 ├── pyproject.toml            # Project configuration & dependencies
 ├── uv.lock                   # Dependency lock file
 ├── .env.example              # Environment template
@@ -507,7 +524,8 @@ GitHub-AI-Agent/
 
 - **`agent.py`**: Contains the `GitHubIssueAgent` class with comprehensive ReAct implementation
   - Well-documented classes: `AgentState`, `IssueProcessingResult`, `GitHubIssueAgent`
-  - Comprehensive tool management with 5 repository operation tools
+  - Comprehensive tool management with 5 repository operation tools + MCP integration
+  - MCP client for external tool integration with automatic discovery
   - Robust error handling and state management
   - Streaming execution support with fallback to invoke mode
 - **`github_client.py`**: Handles all GitHub API operations (issues, PRs, files, authentication)
@@ -604,97 +622,6 @@ Each tool includes:
 - **Development Tools**: Black, isort, mypy configured for code quality
 - **Type Safety**: MyPy configuration for strict type checking
 - **Modern Python**: Requires Python 3.12+ with modern language features
-
-## Python Best Practices Implementation
-
-### Type Safety and Modern Python Features
-- **Python 3.12+ Requirements**: Leverages modern language features and improved performance
-- **Comprehensive Type Hints**: All functions, methods, and variables include proper type annotations
-- **TypedDict Usage**: Structured data definitions for LangGraph state management
-- **Dataclasses**: Clean data containers with automatic method generation
-- **Optional/Union Types**: Explicit handling of nullable values and type unions
-
-### Error Handling and Robustness
-- **Exception Hierarchy**: Proper exception handling with specific error types
-- **Try-Catch Blocks**: Strategic exception handling around external API calls
-- **Fallback Mechanisms**: Graceful degradation when primary operations fail
-- **Logging Integration**: Comprehensive error logging with context and stack traces
-- **Validation**: Input validation using Pydantic schemas and custom validators
-
-### Configuration and Environment Management
-- **Pydantic Settings**: Type-safe configuration with automatic validation
-- **Environment Variables**: Secure credential management through environment configuration
-- **YAML Configuration**: External configuration files for prompts and templates
-- **Default Values**: Sensible defaults for all configuration options
-- **Configuration Validation**: Early validation of required settings on startup
-
-### Code Organization and Modularity
-- **Single Responsibility**: Each module has a clear, focused purpose
-- **Dependency Injection**: Clean dependency management through constructor injection
-- **Interface Segregation**: Minimal coupling between components
-- **Abstraction Layers**: Clear separation between business logic and external APIs
-- **Factory Patterns**: Tool creation using factory methods for flexibility
-
-### Memory Management and Performance
-- **Lazy Loading**: Repository connections established only when needed
-- **Resource Cleanup**: Proper cleanup of temporary state and resources
-- **Streaming Support**: Memory-efficient processing of large agent conversations
-- **Connection Pooling**: Efficient HTTP connection management through httpx
-- **State Management**: Immutable state patterns for thread safety
-
-## Contributing
-
-### Development Setup
-1. **Clone the repository**: `git clone <repository-url>`
-2. **Install dependencies**: `uv sync` (or `pip install -e .`)
-3. **Copy environment template**: `cp .env.example .env`
-4. **Configure environment variables** in `.env` file
-
-### Development Workflow
-1. **Create a feature branch**: `git checkout -b feature/your-feature`
-2. **Make your changes** following the established patterns
-3. **Run quality checks**:
-   ```bash
-   uv run black .          # Code formatting
-   uv run isort .          # Import sorting
-   uv run mypy github_ai_agent  # Type checking
-   uv run pytest          # Run tests
-   ```
-4. **Test your changes** thoroughly
-5. **Submit a pull request** with clear description
-
-### Code Standards
-- **Follow existing patterns** established in the codebase
-- **Add comprehensive docstrings** for new classes and methods
-- **Include type hints** for all function signatures
-- **Write tests** for new functionality
-- **Update documentation** when adding features
-- **Follow PEP 8** style guidelines (enforced by Black)
-
-## Dependencies and Technology Stack
-
-### Core Dependencies
-- **LangGraph (>=0.2.39)**: State-of-the-art framework for building stateful multi-actor LLM applications
-- **LangChain (>=0.3.7)**: Comprehensive framework for LLM application development
-- **LangChain-OpenAI (>=0.2.8)**: OpenAI integration with structured tool calling support
-- **OpenAI GPT-4o-mini**: Cost-efficient model with excellent reasoning capabilities
-
-### GitHub Integration
-- **PyGithub (>=2.4.0)**: Comprehensive Python wrapper for GitHub REST API v3
-- **PyJWT (>=2.8.0)**: JSON Web Token implementation for GitHub App authentication
-- **Cryptography (>=41.0.0)**: Secure cryptographic operations for key management
-
-### Configuration and Data Management
-- **Pydantic (>=2.9.2)**: Data validation and serialization with type safety
-- **Pydantic-Settings (>=2.6.0)**: Environment-based configuration management
-- **PyYAML**: YAML configuration file parsing for prompts and templates
-- **Python-dotenv (>=1.0.1)**: Environment variable loading from .env files
-
-### Development and Quality Assurance
-- **Black (>=24.10.0)**: Uncompromising code formatter for consistent style
-- **isort (>=5.13.2)**: Import statement organization and sorting
-- **MyPy (>=1.13.0)**: Static type checker for enhanced code reliability
-- **Pytest (>=8.3.3)**: Modern testing framework with extensive plugin ecosystem
 
 ## Debugging and Monitoring
 
@@ -840,7 +767,7 @@ uv run python main.py
 [23:04:25] 🔧 TOOL create_files_from_request [{"filename": "TEST.md", "file_content": "# Clouds
 
 In the sky so high and bright,
-Fluffy clouds t...
+Fluffy cloud...
 [23:04:25] ❌ TOOL create_files_from_request Invalid JSON format: Invalid control character at: line 1 column 51 (char 50)
 [23:04:25] 🧠 values (ToolMessage)
     {"success": false, "error": "Invalid JSON format: Invalid control character at: line 1 column 51 (char 50)", "files_created": []}
