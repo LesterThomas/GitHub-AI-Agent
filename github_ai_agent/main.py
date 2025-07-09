@@ -403,7 +403,7 @@ This is a draft pull request that was automatically created when the AI Agent st
                 comments_context = "\n\n".join(
                     [
                         f"**Comment by {comment['author']} on {comment['created_at']}:**\n{comment['body']}"
-                        for comment in unaddressed_user_comments
+                        for comment in all_comments_sorted  # use all comments, not just unaddressed
                     ]
                 )
 
