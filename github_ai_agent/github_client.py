@@ -841,3 +841,44 @@ class GitHubClient:
         except GithubException as e:
             log_error(f"Error creating empty commit on branch '{branch_name}': {e}")
             return False
+
+    def is_issue_being_processed(self, issue_number: int) -> bool:
+        """Check if an issue is already being processed by looking for a specific comment.
+
+        Args:
+            issue_number: Issue number to check
+
+        Returns:
+            True if issue is already being processed, False otherwise
+        """
+        try:
+            issue = self.get_issue(issue_number)
+            if not issue:
+                return False
+
+            # Get comments on the issue
+            comments = issue.get_comments()
+
+            # Look for the specific comment that indicates processing has started
+            # Check for key phrases that indicate processing has started
+            processing_indicators = [
+                "I've started processing this issue and created a draft pull request",
+                "started processing this issue",
+                "AI Agent Started Processing",
+                "created a draft pull request to track progress",
+            ]
+
+            for comment in comments:
+                comment_body = comment.body.lower() if comment.body else ""
+                for indicator in processing_indicators:
+                    if indicator.lower() in comment_body:
+                        log_github_action(
+                            f"Issue #{issue_number} is already being processed (found: '{indicator}')"
+                        )
+                        return True
+
+            return False
+
+        except GithubException as e:
+            log_error(f"Error checking if issue {issue_number} is being processed: {e}")
+            return False

@@ -126,10 +126,21 @@ class GitHubAIAgentApp:
         # Get issues assigned to the specified user
         issues = self.github_client.get_issues_assigned_to(self.settings.issue_assignee)
 
-        # Filter out already processed issues
+        # Filter out already processed issues and issues being processed
+        all_issues_count = len(issues)
         new_issues = [
-            issue for issue in issues if issue.number not in self.processed_issues
+            issue
+            for issue in issues
+            if issue.number not in self.processed_issues
+            and not self.github_client.is_issue_being_processed(issue.number)
         ]
+
+        skipped_count = all_issues_count - len(new_issues)
+        if skipped_count > 0:
+            log_info(
+                f"Skipped {skipped_count} issues (already processed or being processed)",
+                "FILTER",
+            )
 
         if not new_issues:
             log_info(
@@ -139,13 +150,22 @@ class GitHubAIAgentApp:
 
             # Look for issues with 'AI Agent' label
             labeled_issues = self.github_client.get_issues_with_label("AI Agent")
+            all_labeled_count = len(labeled_issues)
 
-            # Filter out already processed issues and take only the first one
+            # Filter out already processed issues and issues being processed and take only the first one
             unprocessed_labeled = [
                 issue
                 for issue in labeled_issues
                 if issue.number not in self.processed_issues
+                and not self.github_client.is_issue_being_processed(issue.number)
             ]
+
+            skipped_labeled_count = all_labeled_count - len(unprocessed_labeled)
+            if skipped_labeled_count > 0:
+                log_info(
+                    f"Skipped {skipped_labeled_count} labeled issues (already processed or being processed)",
+                    "FILTER",
+                )
 
             if unprocessed_labeled:
                 new_issues = [unprocessed_labeled[0]]  # Take only the first issue
