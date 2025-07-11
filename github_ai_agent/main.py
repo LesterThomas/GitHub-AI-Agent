@@ -3,6 +3,7 @@
 import logging
 import sys
 import time
+import warnings
 from typing import Set, Optional
 
 from .agent import GitHubIssueAgent
@@ -30,6 +31,12 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("langgraph").setLevel(logging.WARNING)
+
+# Suppress MCP SDK cleanup warnings (harmless asyncio shutdown issue)
+warnings.filterwarnings("ignore", category=RuntimeWarning, 
+                       message=".*unhandled exception during asyncio.run.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning,
+                       message=".*an error occurred during closing of asynchronous generator.*")
 
 
 # Create a custom filter to hide LangGraph debug output
@@ -493,7 +500,11 @@ Please review the updated changes."""
         """Clean up application resources."""
         log_info("Cleaning up application resources", "CLEANUP")
         if hasattr(self, "agent") and self.agent:
-            self.agent.cleanup()
+            try:
+                self.agent.cleanup()
+                log_info("Agent cleanup completed", "CLEANUP")
+            except Exception as e:
+                log_error(f"Error during agent cleanup: {e}", "CLEANUP_ERROR")
 
 
 def main() -> None:

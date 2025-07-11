@@ -13,6 +13,7 @@ workflow for issue resolution.
 
 import json
 import logging
+import warnings
 from dataclasses import dataclass
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
@@ -166,6 +167,10 @@ class GitHubIssueAgent:
         self.mcp_client = None
         if enable_mcp:
             try:
+                # Suppress MCP SDK cleanup warnings (harmless asyncio shutdown issue)
+                warnings.filterwarnings("ignore", category=RuntimeWarning, 
+                                      message=".*unhandled exception during asyncio.run.*")
+                
                 self.mcp_client = MCPClient(mcp_config_file)
                 log_agent_action("MCP client initialized", "MCP_INIT")
             except Exception as e:

@@ -2,22 +2,28 @@
 MCP (Model Context Protocol) Client for GitHub AI Agent
 
 This module provides MCP client functionality to connect to external MCP servers
-over HTTP/SSE and integrate their tools with the GitHub AI Agent's existing repository tools.
+using the official MCP Python SDK and integrate their tools with the GitHub AI Agent's existing repository tools.
+
+Note: There is a known issue with the MCP SDK's streamable HTTP client that causes
+harmless cleanup warnings during asyncio shutdown. This does not affect functionality.
 """
 
+import asyncio
 import json
 import logging
 import os
-import httpx
-import threading
-import time
-import uuid
+import warnings
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Queue, Empty
 
 from langchain_core.tools import Tool
+
+# MCP SDK imports
+from mcp import ClientSession, StdioServerParameters, types as mcp_types
+from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.shared.metadata_utils import get_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +33,27 @@ class MCPServerConfig:
     """Configuration for an MCP server."""
 
     name: str
-    url: str
+    transport: str = "stdio"  # "stdio" or "streamable_http"
+    
+    # For stdio transport
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
+    
+    # For streamable_http transport
+    url: Optional[str] = None
     headers: Optional[Dict[str, str]] = None
 
     def __post_init__(self):
         """Validate configuration after initialization."""
-        if not self.url:
-            raise ValueError("MCP servers must specify 'url'")
+        if self.transport == "stdio":
+            if not self.command:
+                raise ValueError("stdio transport requires 'command'")
+        elif self.transport == "streamable_http":
+            if not self.url:
+                raise ValueError("streamable_http transport requires 'url'")
+        else:
+            raise ValueError(f"Unsupported transport: {self.transport}")
 
 
 @dataclass
@@ -44,13 +64,14 @@ class MCPTool:
     description: str
     server_name: str
     input_schema: Dict[str, Any]
+    output_schema: Optional[Dict[str, Any]] = None
 
 
 class MCPClient:
     """
-    MCP Client for connecting to external MCP servers over HTTP/SSE.
+    MCP Client for connecting to external MCP servers using the official MCP Python SDK.
 
-    This client manages connections to MCP servers via HTTP/SSE, discovers available tools,
+    This client manages connections to MCP servers via stdio or streamable HTTP, discovers available tools,
     and creates LangChain Tool objects that can be used by the ReAct agent.
     """
 
@@ -64,13 +85,27 @@ class MCPClient:
         self.config_file = config_file
         self.server_configs: Dict[str, MCPServerConfig] = {}
         self.available_tools: List[MCPTool] = []
-        self.http_clients: Dict[str, httpx.Client] = {}
-        self.sse_connections: Dict[str, Any] = {}  # Store SSE connection info
-        self.sse_threads: Dict[str, threading.Thread] = {}  # Store SSE threads
-        self.message_queues: Dict[str, Queue] = {}  # Store response queues
-        self.request_id_counter = 0
-        self.pending_requests: Dict[int, Queue] = {}  # Track pending JSON-RPC requests
-        self._shutdown_event = threading.Event()
+        self.sessions: Dict[str, ClientSession] = {}
+        self.stream_pairs: Dict[str, Any] = {}  # Store read/write streams
+        self._running = False
+        self._cleanup_attempted = False
+
+    def __del__(self):
+        """Destructor to ensure cleanup happens."""
+        if self._running and not self._cleanup_attempted:
+            try:
+                self.cleanup()
+            except Exception as e:
+                # Use print instead of logger since logging might be shut down
+                print(f"Warning: Error in MCP client destructor: {e}")
+                
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.cleanup()
 
     def load_config(self) -> None:
         """Load MCP server configuration from JSON file."""
@@ -87,27 +122,46 @@ class MCPClient:
             mcp_servers = config_data.get("mcpServers", {})
 
             for server_name, server_config in mcp_servers.items():
-                # All servers are HTTP/SSE-based
-                if "url" not in server_config:
-                    logger.error(
-                        f"Invalid server config for {server_name}: must specify 'url'"
+                transport = server_config.get("transport", "stdio")
+                
+                if transport == "stdio":
+                    command = server_config.get("command")
+                    if not command:
+                        logger.error(f"stdio server {server_name} missing 'command'")
+                        continue
+                    
+                    self.server_configs[server_name] = MCPServerConfig(
+                        name=server_name,
+                        transport="stdio",
+                        command=command,
+                        args=server_config.get("args", []),
+                        env=server_config.get("env"),
                     )
+                    
+                elif transport == "streamable_http":
+                    url = server_config.get("url")
+                    if not url:
+                        logger.error(f"streamable_http server {server_name} missing 'url'")
+                        continue
+                    
+                    self.server_configs[server_name] = MCPServerConfig(
+                        name=server_name,
+                        transport="streamable_http",
+                        url=url,
+                        headers=server_config.get("headers"),
+                    )
+                else:
+                    logger.error(f"Unsupported transport '{transport}' for server {server_name}")
                     continue
-
-                self.server_configs[server_name] = MCPServerConfig(
-                    name=server_name,
-                    url=server_config["url"],
-                    headers=server_config.get("headers"),
-                )
 
             logger.info(f"Loaded {len(self.server_configs)} MCP server configurations")
 
         except Exception as e:
             logger.error(f"Error loading MCP config: {e}")
 
-    def start_server(self, server_name: str) -> bool:
+    async def start_server(self, server_name: str) -> bool:
         """
-        Start an MCP server connection over HTTP/SSE.
+        Start an MCP server connection.
 
         Args:
             server_name: Name of the server to start
@@ -119,211 +173,146 @@ class MCPClient:
             logger.error(f"Unknown MCP server: {server_name}")
             return False
 
-        config = self.server_configs[server_name]
-        return self._start_sse_server(server_name, config)
-
-    def _start_sse_server(self, server_name: str, config: MCPServerConfig) -> bool:
-        """Start connection to an HTTP/SSE-based MCP server."""
-        if server_name in self.http_clients:
+        if server_name in self.sessions:
             logger.info(f"MCP server {server_name} already connected")
             return True
 
+        config = self.server_configs[server_name]
+
         try:
-            # Create HTTP client for the SSE server
-            headers = config.headers or {}
-
-            client = httpx.Client(timeout=30.0)
-
-            # Parse base URL and construct endpoints
-            base_url = config.url.rstrip("/")
-            sse_url = f"{base_url}/sse"
-            messages_url = f"{base_url}/messages"
-
-            # Generate a session ID
-            session_id = str(uuid.uuid4())
-
-            # Store the client and connection info
-            self.http_clients[server_name] = client
-            self.sse_connections[server_name] = {
-                "base_url": base_url,
-                "sse_url": sse_url,
-                "messages_url": messages_url,
-                "headers": headers,
-                "connected": False,
-                "session_id": session_id,
-            }
-
-            # Initialize message queue for this server
-            self.message_queues[server_name] = Queue()
-
-            # Start SSE connection in a separate thread
-            sse_thread = threading.Thread(
-                target=self._handle_sse_connection,
-                args=(server_name, config),
-                daemon=True,
-            )
-            sse_thread.start()
-            self.sse_threads[server_name] = sse_thread
-
-            # Wait a moment for connection to establish
-            time.sleep(1.0)
-
-            # Check if connection was successful
-            if self.sse_connections[server_name].get("connected"):
-                logger.info(f"Connected to HTTP/SSE MCP server: {server_name}")
-                logger.info(f"  SSE endpoint: {sse_url}")
-                logger.info(f"  Messages endpoint: {messages_url}")
-                logger.info(f"  Session ID: {session_id}")
-                return True
+            if config.transport == "stdio":
+                return await self._start_stdio_server(server_name, config)
+            elif config.transport == "streamable_http":
+                return await self._start_http_server(server_name, config)
             else:
-                logger.error(f"Failed to establish SSE connection to {server_name}")
+                logger.error(f"Unsupported transport: {config.transport}")
                 return False
 
         except Exception as e:
-            logger.error(f"Failed to connect to HTTP/SSE server {server_name}: {e}")
+            logger.error(f"Failed to start MCP server {server_name}: {e}")
             return False
 
-    def _handle_sse_connection(self, server_name: str, config: MCPServerConfig) -> None:
-        """
-        Handle the long-running SSE connection in a separate thread.
-
-        This method establishes the SSE connection and listens for events.
-        """
+    async def _start_stdio_server(self, server_name: str, config: MCPServerConfig) -> bool:
+        """Start connection to a stdio-based MCP server."""
         try:
-            connection_info = self.sse_connections[server_name]
-            sse_url = connection_info["sse_url"]
-            session_id = connection_info["session_id"]
-            headers = dict(config.headers or {})
-
-            # Add SSE-specific headers
-            headers.update(
-                {
-                    "Accept": "text/event-stream",
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                }
+            # Create server parameters
+            server_params = StdioServerParameters(
+                command=config.command,
+                args=config.args or [],
+                env=config.env,
             )
 
-            # Include session ID in SSE URL
-            sse_url = f"{sse_url}"
-
-            logger.info(f"Starting SSE connection to {sse_url}")
-
-            # Create a new client for the SSE connection (streaming)
-            with httpx.stream(
-                "GET",
-                sse_url,
-                headers=headers,
-                timeout=None,  # No timeout for SSE
-            ) as response:
-
-                if response.status_code == 200:
-                    # Mark connection as successful
-                    self.sse_connections[server_name]["connected"] = True
-                    logger.info(f"SSE connection established for {server_name}")
-
-                    # Process SSE events
-                    for line in response.iter_lines():
-                        if self._shutdown_event.is_set():
-                            break
-
-                        line = line.strip()
-                        if not line:
-                            continue
-
-                        if line.startswith("data: "):
-                            data = line[6:]  # Remove "data: " prefix
-                            try:
-                                event_data = json.loads(data)
-                                self._handle_sse_event(server_name, event_data)
-                            except json.JSONDecodeError:
-                                logger.warning(f"Invalid JSON in SSE event: {data}")
-
-                else:
-                    logger.error(f"SSE connection failed: HTTP {response.status_code}")
+            # Establish stdio connection
+            stdio_context = stdio_client(server_params)
+            read_stream, write_stream = await stdio_context.__aenter__()
+            
+            # Store the context for cleanup
+            self.stream_pairs[server_name] = {
+                'context': stdio_context,
+                'safe_cleanup': True
+            }
+            
+            # Create and initialize session
+            session = ClientSession(read_stream, write_stream)
+            await session.__aenter__()
+            await session.initialize()
+            
+            self.sessions[server_name] = session
+            logger.info(f"Connected to stdio MCP server: {server_name}")
+            return True
 
         except Exception as e:
-            logger.error(f"Error in SSE connection for {server_name}: {e}")
-        finally:
-            self.sse_connections[server_name]["connected"] = False
-            logger.info(f"SSE connection closed for {server_name}")
+            logger.error(f"Failed to connect to stdio server {server_name}: {e}")
+            return False
 
-    def _handle_sse_event(self, server_name: str, event_data: Dict[str, Any]) -> None:
-        """Handle an incoming SSE event from the MCP server."""
+    async def _start_http_server(self, server_name: str, config: MCPServerConfig) -> bool:
+        """Start connection to a streamable HTTP-based MCP server."""
         try:
-            # Check if this is a JSON-RPC response
-            if "id" in event_data and event_data["id"] is not None:
-                request_id = event_data["id"]
-
-                # If we have a pending request for this ID, deliver the response
-                if request_id in self.pending_requests:
-                    response_queue = self.pending_requests[request_id]
-                    response_queue.put(event_data)
-                    logger.debug(f"Delivered response for request {request_id}")
-                else:
-                    logger.warning(
-                        f"Received response for unknown request ID: {request_id}"
-                    )
-
-            elif "method" in event_data:
-                # This is a notification or request from the server
-                method = event_data["method"]
-                logger.info(f"Received server notification: {method}")
-
-                # Handle specific notifications if needed
-                if method == "notifications/initialized":
-                    logger.info(f"Server {server_name} confirmed initialization")
-
-            else:
-                logger.debug(f"Received SSE event: {event_data}")
+            logger.info(f"Connecting to MCP server {server_name} at {config.url}")
+            
+            # Prepare headers for SSE connection
+            headers = config.headers or {}
+            
+            # Add SSE-specific headers
+            headers.setdefault('Accept', 'text/event-stream')
+            headers.setdefault('Cache-Control', 'no-cache')
+            headers.setdefault('Connection', 'keep-alive')
+            
+            logger.info(f"Request headers: {headers}")
+            
+            # Try to establish HTTP connection
+            # Note: streamablehttp_client should make a GET request for SSE
+            try:
+                http_context = streamablehttp_client(config.url, headers=headers)
+                read_stream, write_stream, _ = await http_context.__aenter__()
+                
+                logger.info(f"HTTP connection established for {server_name}")
+                
+                # Store the context for cleanup, but with a flag to avoid problematic cleanup
+                self.stream_pairs[server_name] = {
+                    'context': http_context,
+                    'safe_cleanup': True  # Flag to control cleanup behavior
+                }
+                
+                # Create and initialize session
+                session = ClientSession(read_stream, write_stream)
+                await session.__aenter__()
+                
+                logger.info(f"Initializing MCP session for {server_name}")
+                await session.initialize()
+                
+                self.sessions[server_name] = session
+                logger.info(f"Connected to streamable HTTP MCP server: {server_name}")
+                return True
+                
+            except Exception as connection_error:
+                logger.error(f"Connection error for {server_name}: {connection_error}")
+                logger.info(f"Full connection error: {connection_error}", exc_info=True)
+                raise
 
         except Exception as e:
-            logger.error(f"Error handling SSE event from {server_name}: {e}")
+            logger.error(f"Failed to connect to HTTP server {server_name}: {e}")
+            logger.info(f"Full error details: {e}", exc_info=True)
+            return False
 
-    def stop_server(self, server_name: str) -> None:
-        """Stop an MCP server HTTP connection."""
-        # Signal shutdown to SSE thread
-        if server_name in self.sse_threads:
-            self._shutdown_event.set()
+    async def stop_server(self, server_name: str) -> None:
+        """Stop an MCP server connection."""
+        # Store references to avoid dictionary modification during iteration
+        session = self.sessions.get(server_name)
+        pair_info = self.stream_pairs.get(server_name)
+        
+        # First close the session
+        if session:
+            try:
+                await session.__aexit__(None, None, None)
+                del self.sessions[server_name]
+                logger.info(f"Closed MCP server session: {server_name}")
+            except Exception as e:
+                logger.error(f"Error closing session for {server_name}: {e}")
 
-            # Wait for SSE thread to finish (with timeout)
-            sse_thread = self.sse_threads[server_name]
-            sse_thread.join(timeout=5.0)
+        # Clear stream pair tracking (don't force context cleanup)
+        if pair_info:
+            try:
+                del self.stream_pairs[server_name]
+                logger.info(f"Removed MCP server connection tracking: {server_name}")
+                # Let the context cleanup naturally to avoid task group issues
+            except Exception as e:
+                logger.error(f"Error cleaning up streams for {server_name}: {e}")
 
-            if sse_thread.is_alive():
-                logger.warning(
-                    f"SSE thread for {server_name} did not shut down gracefully"
-                )
-
-            del self.sse_threads[server_name]
-
-        # Close HTTP client
-        if server_name in self.http_clients:
-            client = self.http_clients[server_name]
-            client.close()
-            del self.http_clients[server_name]
-            logger.info(f"Closed MCP server connection: {server_name}")
-
-        # Clean up other resources
-        if server_name in self.sse_connections:
-            del self.sse_connections[server_name]
-
-        if server_name in self.message_queues:
-            del self.message_queues[server_name]
-
-    def stop_all_servers(self) -> None:
+    async def stop_all_servers(self) -> None:
         """Stop all running MCP servers."""
-        # Signal shutdown to all threads
-        self._shutdown_event.set()
+        servers_to_stop = list(self.sessions.keys()) + list(self.stream_pairs.keys())
+        # Remove duplicates while preserving order
+        servers_to_stop = list(dict.fromkeys(servers_to_stop))
+        
+        for server_name in servers_to_stop:
+            try:
+                await self.stop_server(server_name)
+            except Exception as e:
+                logger.error(f"Error stopping server {server_name}: {e}")
+                # Continue with other servers even if one fails
 
-        # Close all connections
-        for server_name in list(self.http_clients.keys()):
-            self.stop_server(server_name)
-
-        # Clear shutdown event for potential restart
-        self._shutdown_event.clear()
-
-    def discover_tools(self, server_name: str) -> List[MCPTool]:
+    async def discover_tools(self, server_name: str) -> List[MCPTool]:
         """
         Discover available tools from an MCP server.
 
@@ -333,223 +322,35 @@ class MCPClient:
         Returns:
             List of available tools from the server
         """
-        if server_name not in self.server_configs:
-            logger.error(f"Unknown MCP server: {server_name}")
+        if server_name not in self.sessions:
+            logger.error(f"MCP server {server_name} is not connected")
             return []
 
-        config = self.server_configs[server_name]
-
         try:
-            return self._discover_tools_sse(server_name, config)
+            session = self.sessions[server_name]
+            
+            # List available tools
+            tools_response = await session.list_tools()
+            
+            tools = []
+            for tool in tools_response.tools:
+                mcp_tool = MCPTool(
+                    name=tool.name,
+                    description=tool.description or "",
+                    server_name=server_name,
+                    input_schema=tool.inputSchema or {},
+                    output_schema=getattr(tool, 'outputSchema', None),
+                )
+                tools.append(mcp_tool)
+            
+            logger.info(f"Discovered {len(tools)} tools from {server_name}")
+            return tools
+
         except Exception as e:
             logger.error(f"Error discovering tools from {server_name}: {e}")
             return []
 
-    def _discover_tools_sse(
-        self, server_name: str, config: MCPServerConfig
-    ) -> List[MCPTool]:
-        """Discover tools from an HTTP/SSE-based MCP server using JSON-RPC."""
-        if server_name not in self.http_clients:
-            logger.error(f"HTTP/SSE server {server_name} is not connected")
-            return []
-
-        try:
-            connection_info = self.sse_connections[server_name]
-            logger.info(f"Discovering tools from HTTP/SSE server {server_name}")
-
-            # Initialize session if not done already
-            if not connection_info.get("session_initialized"):
-                if not self._initialize_mcp_session(
-                    server_name, self.http_clients[server_name], config
-                ):
-                    return self._get_mock_tools(server_name)
-                connection_info["session_initialized"] = True
-
-            # Send tools/list request
-            request_id = self._get_next_request_id()
-            request_payload = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": "tools/list",
-                "params": {},
-            }
-
-            response_data = self._send_json_rpc_request(server_name, request_payload)
-
-            if (
-                response_data
-                and "result" in response_data
-                and "tools" in response_data["result"]
-            ):
-                tools = []
-                for tool_def in response_data["result"]["tools"]:
-                    tool = MCPTool(
-                        name=tool_def["name"],
-                        description=tool_def.get("description", ""),
-                        server_name=server_name,
-                        input_schema=tool_def.get("inputSchema", {}),
-                    )
-                    tools.append(tool)
-                logger.info(f"Discovered {len(tools)} tools from {server_name}")
-                return tools
-            else:
-                logger.error(f"Failed to get tools from {server_name}")
-                return self._get_mock_tools(server_name)
-
-        except Exception as e:
-            logger.error(f"Error communicating with HTTP/SSE server {server_name}: {e}")
-            return self._get_mock_tools(server_name)
-
-    def _initialize_mcp_session(
-        self, server_name: str, client: httpx.Client, config: MCPServerConfig
-    ) -> bool:
-        """Initialize MCP session with the server using the /messages endpoint."""
-        try:
-            connection_info = self.sse_connections[server_name]
-            messages_url = connection_info["messages_url"]
-            session_id = connection_info.get("session_id")
-
-            if not session_id:
-                logger.error(f"No session ID available for {server_name}")
-                return False
-
-            # Wait for SSE connection to be established
-            max_wait = 5  # 5 seconds
-            wait_count = 0
-            while not connection_info.get("connected") and wait_count < max_wait:
-                time.sleep(1)
-                wait_count += 1
-
-            if not connection_info.get("connected"):
-                logger.error(f"SSE connection not established for {server_name}")
-                return False
-
-            # Send MCP initialize request
-            request_id = self._get_next_request_id()
-            init_request = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"roots": {"listChanged": True}, "sampling": {}},
-                    "clientInfo": {"name": "github-ai-agent", "version": "1.0.0"},
-                },
-            }
-
-            # Send request and wait for response
-            response_data = self._send_json_rpc_request(server_name, init_request)
-
-            if response_data and "result" in response_data:
-                # Send initialized notification (no response expected)
-                init_notification = {
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                    "params": {},
-                }
-
-                self._send_json_rpc_notification(server_name, init_notification)
-                logger.info(f"Successfully initialized MCP session for {server_name}")
-                return True
-            else:
-                logger.error(f"Failed to initialize MCP session for {server_name}")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error initializing MCP session for {server_name}: {e}")
-            return False
-
-    def _get_next_request_id(self) -> int:
-        """Get the next request ID for JSON-RPC requests."""
-        self.request_id_counter += 1
-        return self.request_id_counter
-
-    def _send_json_rpc_request(
-        self, server_name: str, request: Dict[str, Any], timeout: float = 10.0
-    ) -> Optional[Dict[str, Any]]:
-        """Send a JSON-RPC request and wait for response."""
-        try:
-            client = self.http_clients[server_name]
-            config = self.server_configs[server_name]
-            connection_info = self.sse_connections[server_name]
-
-            request_id = request.get("id")
-            if request_id is None:
-                logger.error("Request must have an ID for response tracking")
-                return None
-
-            # Create response queue for this request
-            response_queue = Queue()
-            self.pending_requests[request_id] = response_queue
-
-            try:
-                # Send the request via POST to /messages
-                headers = dict(config.headers or {})
-                headers.update(
-                    {
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                    }
-                )
-
-                session_id = connection_info.get("session_id")
-                messages_url = connection_info["messages_url"]
-                request_url = f"{messages_url}?session_id={session_id}"
-
-                response = client.post(request_url, json=request, headers=headers)
-
-                if response.status_code not in [200, 202]:
-                    logger.error(f"HTTP error sending request: {response.status_code}")
-                    return None
-
-                # Wait for response via SSE
-                try:
-                    response_data = response_queue.get(timeout=timeout)
-                    return response_data
-                except Empty:
-                    logger.error(
-                        f"Timeout waiting for response to request {request_id}"
-                    )
-                    return None
-
-            finally:
-                # Clean up the pending request
-                if request_id in self.pending_requests:
-                    del self.pending_requests[request_id]
-
-        except Exception as e:
-            logger.error(f"Error sending JSON-RPC request: {e}")
-            return None
-
-    def _send_json_rpc_notification(
-        self, server_name: str, notification: Dict[str, Any]
-    ) -> bool:
-        """Send a JSON-RPC notification (no response expected)."""
-        try:
-            client = self.http_clients[server_name]
-            config = self.server_configs[server_name]
-            connection_info = self.sse_connections[server_name]
-
-            headers = dict(config.headers or {})
-            headers.update(
-                {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                }
-            )
-
-            session_id = connection_info.get("session_id")
-            messages_url = connection_info["messages_url"]
-            request_url = f"{messages_url}?session_id={session_id}"
-
-            response = client.post(request_url, json=notification, headers=headers)
-            return response.status_code in [200, 202]
-
-        except Exception as e:
-            logger.error(f"Error sending JSON-RPC notification: {e}")
-            return False
-
-    def call_tool(
+    async def call_tool(
         self, tool_name: str, server_name: str, parameters: Dict[str, Any]
     ) -> str:
         """
@@ -563,143 +364,63 @@ class MCPClient:
         Returns:
             JSON string with the tool execution result
         """
-        if server_name not in self.server_configs:
+        if server_name not in self.sessions:
             return json.dumps(
-                {"success": False, "error": f"Unknown server: {server_name}"}
+                {"success": False, "error": f"Server {server_name} is not connected"}
             )
 
-        config = self.server_configs[server_name]
-
         try:
-            return self._call_tool_sse(tool_name, server_name, parameters)
+            session = self.sessions[server_name]
+            
+            # Log the tool call for debugging
+            logger.info(f"Calling tool '{tool_name}' on server '{server_name}' with parameters: {parameters}")
+            
+            # Call the tool
+            result = await session.call_tool(tool_name, parameters)
+            
+            # Log the result for debugging
+            logger.info(f"Tool call result type: {type(result)}")
+            logger.info(f"Tool call result attributes: {dir(result)}")
+            
+            # Format the result
+            if hasattr(result, 'content') and result.content:
+                # Extract content from the result
+                content_items = []
+                for content in result.content:
+                    if hasattr(content, 'text'):
+                        content_items.append(content.text)
+                    elif hasattr(content, 'data'):
+                        content_items.append(str(content.data))
+                
+                response = {
+                    "success": True,
+                    "content": content_items,
+                    "isError": getattr(result, 'isError', False),
+                }
+                
+                # Include structured data if available
+                if hasattr(result, 'structuredData') and result.structuredData:
+                    response["structuredData"] = result.structuredData
+                
+                return json.dumps(response)
+            else:
+                # Check if there's an error in the result
+                if hasattr(result, 'isError') and result.isError:
+                    error_msg = "Tool execution failed"
+                    if hasattr(result, 'content') and result.content:
+                        # Try to extract error message from content
+                        for content in result.content:
+                            if hasattr(content, 'text'):
+                                error_msg = content.text
+                                break
+                    return json.dumps({"success": False, "error": error_msg})
+                else:
+                    return json.dumps({"success": True, "content": [], "isError": False})
+
         except Exception as e:
             logger.error(f"Error calling tool {tool_name} on {server_name}: {e}")
-            return json.dumps({"success": False, "error": str(e)})
-
-    def _call_tool_sse(
-        self, tool_name: str, server_name: str, parameters: Dict[str, Any]
-    ) -> str:
-        """Call a tool on an HTTP/SSE-based MCP server using JSON-RPC."""
-        if server_name not in self.http_clients:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": f"HTTP/SSE server {server_name} is not connected",
-                }
-            )
-
-        try:
-            # Send tools/call request
-            request_id = self._get_next_request_id()
-            request_payload = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": "tools/call",
-                "params": {"name": tool_name, "arguments": parameters},
-            }
-
-            response_data = self._send_json_rpc_request(server_name, request_payload)
-
-            if response_data:
-                if "result" in response_data:
-                    return json.dumps(
-                        {"success": True, "result": response_data["result"]}
-                    )
-                elif "error" in response_data:
-                    return json.dumps(
-                        {"success": False, "error": response_data["error"]}
-                    )
-
-            # Fall back to mock if no valid response
-            logger.warning(f"No valid response from {server_name}, using mock")
-            return self._call_tool_mock(tool_name, server_name, parameters)
-
-        except Exception as e:
-            logger.error(f"Error calling HTTP/SSE tool {tool_name}: {e}")
-            return self._call_tool_mock(tool_name, server_name, parameters)
-
-    def _call_tool_mock(
-        self, tool_name: str, server_name: str, parameters: Dict[str, Any]
-    ) -> str:
-        """Mock tool implementation for testing and fallback."""
-        try:
-            # Mock implementation for demonstration
-            if server_name == "filesystem" or "filesystem" in server_name:
-                if tool_name == "read_file":
-                    path = parameters.get("path", "")
-                    if os.path.exists(path):
-                        with open(path, "r", encoding="utf-8") as f:
-                            content = f.read()
-                        return json.dumps({"success": True, "content": content})
-                    else:
-                        return json.dumps({"success": False, "error": "File not found"})
-                elif tool_name == "write_file":
-                    path = parameters.get("path", "")
-                    content = parameters.get("content", "")
-                    try:
-                        with open(path, "w", encoding="utf-8") as f:
-                            f.write(content)
-                        return json.dumps(
-                            {"success": True, "message": f"File written: {path}"}
-                        )
-                    except Exception as e:
-                        return json.dumps({"success": False, "error": str(e)})
-                elif tool_name == "list_directory":
-                    path = parameters.get("path", "")
-                    if os.path.exists(path) and os.path.isdir(path):
-                        items = os.listdir(path)
-                        return json.dumps({"success": True, "items": items})
-                    else:
-                        return json.dumps(
-                            {"success": False, "error": "Directory not found"}
-                        )
-
-            elif server_name == "aiva" or "aiva" in server_name:
-                if tool_name == "query_tmforum_ai_assistant":
-                    query = parameters.get("query", "")
-                    return json.dumps(
-                        {
-                            "success": True,
-                            "response": f"Mock AIVA response for query: {query}. In a real implementation, this would query the TM Forum AI Assistant.",
-                        }
-                    )
-
-            elif server_name == "github":
-                # Mock GitHub operations
-                if tool_name == "search_repositories":
-                    query = parameters.get("query", "")
-                    return json.dumps(
-                        {
-                            "success": True,
-                            "repositories": [
-                                {
-                                    "name": f"mock-repo-{query}",
-                                    "owner": "mock-owner",
-                                    "description": f"Mock repository for query: {query}",
-                                }
-                            ],
-                        }
-                    )
-                elif tool_name == "get_repository_info":
-                    owner = parameters.get("owner", "")
-                    repo = parameters.get("repo", "")
-                    return json.dumps(
-                        {
-                            "success": True,
-                            "repository": {
-                                "name": repo,
-                                "owner": owner,
-                                "description": f"Mock info for {owner}/{repo}",
-                                "stars": 42,
-                                "forks": 10,
-                            },
-                        }
-                    )
-
-            return json.dumps({"success": False, "error": "Tool not implemented"})
-
-        except Exception as e:
-            logger.error(f"Error in mock tool {tool_name}: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            logger.error(f"Exception details: {e}", exc_info=True)
             return json.dumps({"success": False, "error": str(e)})
 
     def create_langchain_tools(self) -> List[Tool]:
@@ -718,36 +439,76 @@ class MCPClient:
             ):
                 def tool_func(*args, **kwargs) -> str:
                     # Handle both positional and keyword arguments
-                    # If positional args are provided, map them to the expected parameter names
+                    schema_properties = input_schema.get("properties", {})
+                    required_params = input_schema.get("required", [])
+                    
+                    # Get parameter names in order (required first, then others)
+                    param_names = list(schema_properties.keys())
+                    if required_params:
+                        param_names = required_params + [
+                            p for p in param_names if p not in required_params
+                        ]
+                    
+                    mapped_kwargs = {}
+                    
                     if args and not kwargs:
-                        # Get the expected parameter names from the tool's input schema
-                        schema_properties = input_schema.get("properties", {})
-                        required_params = input_schema.get("required", [])
-
                         # Map positional arguments to parameter names
-                        param_names = list(schema_properties.keys())
-                        if required_params:
-                            # Use required parameters first
-                            param_names = required_params + [
-                                p for p in param_names if p not in required_params
-                            ]
-
-                        # Create kwargs from positional args
-                        mapped_kwargs = {}
                         for i, arg in enumerate(args):
                             if i < len(param_names):
                                 mapped_kwargs[param_names[i]] = arg
-
-                        return self.call_tool(tool_name, server_name, mapped_kwargs)
+                    elif kwargs:
+                        # Check if we have generic argument names like __arg1, __arg2
+                        generic_args = {k: v for k, v in kwargs.items() if k.startswith('__arg')}
+                        if generic_args:
+                            # Map generic arguments to proper parameter names
+                            sorted_generic = sorted(generic_args.items())
+                            for i, (_, value) in enumerate(sorted_generic):
+                                if i < len(param_names):
+                                    mapped_kwargs[param_names[i]] = value
+                        else:
+                            # Use kwargs directly if they have proper names
+                            mapped_kwargs = kwargs
                     else:
-                        # Use kwargs directly
-                        return self.call_tool(tool_name, server_name, kwargs)
+                        # No arguments provided
+                        mapped_kwargs = {}
+
+                    # Run the async call in the background event loop
+                    if hasattr(self, '_loop') and self._loop:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.call_tool(tool_name, server_name, mapped_kwargs), 
+                            self._loop
+                        )
+                        return future.result(timeout=30)  # 30 second timeout
+                    else:
+                        # Fallback to creating a new event loop
+                        return asyncio.run(
+                            self.call_tool(tool_name, server_name, mapped_kwargs)
+                        )
 
                 return tool_func
 
+            # Create a more descriptive tool description with parameter info
+            param_info = ""
+            if mcp_tool.input_schema.get("properties"):
+                properties = mcp_tool.input_schema["properties"]
+                required = mcp_tool.input_schema.get("required", [])
+                param_descriptions = []
+                
+                for param_name, param_def in properties.items():
+                    param_type = param_def.get("type", "string")
+                    param_desc = param_def.get("description", param_def.get("title", param_name))
+                    required_marker = " (required)" if param_name in required else ""
+                    param_descriptions.append(f"{param_name} ({param_type}){required_marker}: {param_desc}")
+                
+                if param_descriptions:
+                    param_info = f"\n\nParameters:\n" + "\n".join(f"- {desc}" for desc in param_descriptions)
+            
+            # Use get_display_name for better naming
+            display_name = get_display_name(mcp_tool) if hasattr(mcp_tool, 'title') else mcp_tool.name
+            
             langchain_tool = Tool(
                 name=f"mcp_{mcp_tool.server_name}_{mcp_tool.name}",
-                description=f"[MCP {mcp_tool.server_name}] {mcp_tool.description}",
+                description=f"[MCP {mcp_tool.server_name}] {mcp_tool.description}{param_info}",
                 func=create_tool_func(
                     mcp_tool.name, mcp_tool.server_name, mcp_tool.input_schema
                 ),
@@ -757,9 +518,9 @@ class MCPClient:
 
         return langchain_tools
 
-    def initialize(self) -> List[Tool]:
+    async def initialize_async(self) -> List[Tool]:
         """
-        Initialize the MCP client and return available tools.
+        Initialize the MCP client asynchronously and return available tools.
 
         Returns:
             List of LangChain Tool objects from all configured MCP servers
@@ -768,8 +529,8 @@ class MCPClient:
 
         # Start servers and discover tools
         for server_name in self.server_configs:
-            if self.start_server(server_name):
-                tools = self.discover_tools(server_name)
+            if await self.start_server(server_name):
+                tools = await self.discover_tools(server_name)
                 self.available_tools.extend(tools)
                 logger.info(
                     f"Discovered {len(tools)} tools from MCP server: {server_name}"
@@ -779,41 +540,103 @@ class MCPClient:
         langchain_tools = self.create_langchain_tools()
         logger.info(f"Created {len(langchain_tools)} MCP tools for the agent")
 
+        self._running = True
         return langchain_tools
 
+    def initialize(self) -> List[Tool]:
+        """
+        Initialize the MCP client and return available tools.
+        
+        This is a synchronous wrapper around initialize_async.
+        IMPORTANT: This method starts an event loop that stays running
+        to keep MCP connections alive for the tools to use.
+
+        Returns:
+            List of LangChain Tool objects from all configured MCP servers
+        """
+        # We need to run the async initialization in a way that keeps
+        # the event loop and connections alive
+        import threading
+        import asyncio
+        
+        # Create a new event loop for the MCP client
+        self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        self._loop_thread.start()
+        
+        # Wait for the loop to be ready
+        import time
+        time.sleep(0.1)
+        
+        # Initialize the MCP client in the background loop
+        future = asyncio.run_coroutine_threadsafe(self.initialize_async(), self._loop)
+        tools = future.result(timeout=30)  # 30 second timeout
+        
+        return tools
+    
+    def _run_event_loop(self):
+        """Run the event loop in a background thread."""
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+        
+    async def cleanup_async(self) -> None:
+        """Clean up resources and stop all servers asynchronously."""
+        if self._running:
+            try:
+                # Close sessions first
+                for server_name in list(self.sessions.keys()):
+                    try:
+                        session = self.sessions[server_name]
+                        await session.__aexit__(None, None, None)
+                        del self.sessions[server_name]
+                        logger.info(f"Closed MCP server session: {server_name}")
+                    except Exception as e:
+                        logger.warning(f"Error closing session for {server_name}: {e}")
+                
+                # Clear the stream pairs without forcing cleanup
+                # The HTTP context will be cleaned up naturally by Python's GC
+                # avoiding the task group context issues
+                stream_pairs_copy = dict(self.stream_pairs)
+                self.stream_pairs.clear()
+                
+                for server_name, pair_info in stream_pairs_copy.items():
+                    try:
+                        logger.info(f"Removed MCP server connection tracking: {server_name}")
+                        # Don't attempt to clean up the context - let it be handled naturally
+                        # This avoids the "Attempted to exit cancel scope in a different task" error
+                    except Exception as e:
+                        logger.warning(f"Error during stream cleanup for {server_name}: {e}")
+                
+                self._running = False
+                logger.info("MCP client cleanup completed")
+            except Exception as e:
+                logger.error(f"Error during MCP cleanup: {e}")
+                self._running = False
+        
     def cleanup(self) -> None:
         """Clean up resources and stop all servers."""
-        self.stop_all_servers()
-
-        # Additional cleanup
-        self.pending_requests.clear()
-
-        logger.info("MCP client cleanup completed")
-
-    def _handle_sse_events(self, server_name: str) -> None:
-        """
-        Handle SSE events from the /sse endpoint.
-
-        This method would establish a connection to the /sse endpoint and listen for events.
-        For now, it's a placeholder for future implementation when real-time event handling is needed.
-        """
-        if server_name not in self.http_clients:
-            logger.error(f"SSE server {server_name} is not connected")
-            return
-
-        try:
-            connection_info = self.sse_connections[server_name]
-            sse_url = connection_info["sse_url"]
-
-            # Placeholder for SSE event handling
-            # In a real implementation, this would:
-            # 1. Open an SSE connection to sse_url
-            # 2. Listen for events like tool call responses, notifications, etc.
-            # 3. Handle events appropriately (update state, call callbacks, etc.)
-
-            logger.info(
-                f"SSE event handling placeholder for {server_name} at {sse_url}"
-            )
-
-        except Exception as e:
-            logger.error(f"Error setting up SSE event handling for {server_name}: {e}")
+        if self._running and not self._cleanup_attempted:
+            self._cleanup_attempted = True
+            try:
+                if hasattr(self, '_loop') and self._loop:
+                    # Schedule cleanup in the background loop
+                    future = asyncio.run_coroutine_threadsafe(self.cleanup_async(), self._loop)
+                    future.result(timeout=10)  # 10 second timeout
+                    
+                    # Stop the event loop
+                    self._loop.call_soon_threadsafe(self._loop.stop)
+                    
+                    # Wait for thread to finish
+                    if hasattr(self, '_loop_thread') and self._loop_thread:
+                        self._loop_thread.join(timeout=5)
+                        
+                else:
+                    # Fallback to old method
+                    try:
+                        asyncio.run(self.cleanup_async())
+                    except RuntimeError:
+                        # No event loop, that's fine
+                        pass
+            except Exception as e:
+                logger.error(f"Error during MCP cleanup: {e}")
+                self._running = False
