@@ -1,6 +1,8 @@
 # GitHub AI Agent
 
-An AI Agent built with LanGraph ReAct pattern that polls GitHub issues with the "AI Agent" label and automatically generates pull requests with relevant content.
+An AI Agent built with LanGraph ReAct pattern that can retrieve GitHub issues and automatically generates GitHub pull requests with relevant content. The agent has a configurable System Prompt and configurable set of tools (via MCP). The idea is to create multiple agent instances, each with its own GitHub profile and a different set of tools. This mechanism is an ideal way to interact asynchronously with multiple AI Assistants, whilst maintaining a strong human-in-the-loop oversight.
+
+**This work is experimental and not suitable for production use**
 
 ## Features
 
